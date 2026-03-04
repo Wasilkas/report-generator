@@ -1,0 +1,104 @@
+# ── App constants ─────────────────────────────────────────────────────────────
+# Internal defaults — not intended for user editing.
+# User-tunable settings belong in config.yaml.
+
+# ── Mean row ('Среднее') ───────────────────────────────────────────────────────
+
+# Columns left blank in the 'Среднее' row (counts, ids, thresholds).
+excluded_from_mean:
+  - ID
+  - Количество примеров train
+  - Количество примеров test
+  - Количество примеров val
+  - Число примеров train
+  - Число примеров test
+  - Число примеров val
+  - tp
+  - fp
+  - fn
+  - confidence
+
+# ── Comparison sheet coloring ─────────────────────────────────────────────────
+
+# Columns where a positive diff (new − prod) means the new model is better.
+better_higher_cols:
+  - precision
+  - recall
+  - f1_score
+  - ap50
+  - ap75
+  - ap50_95
+
+# Columns where a negative diff (new − prod) means the new model is better.
+better_lower_cols:
+  - perebrak
+  - nedobrak
+
+# ── Number formatting ──────────────────────────────────────────────────────────
+
+# Columns rendered with 4 decimal places.
+ratio_cols:
+  - confidence
+  - precision
+  - recall
+  - f1_score
+  - ap50
+  - ap75
+  - ap50_95
+  - perebrak
+  - nedobrak
+
+# Columns rendered as integers (no decimal places).
+int_cols:
+  - ID
+  - tp
+  - fp
+  - fn
+  - Количество примеров test
+  - Количество примеров train
+  - Количество примеров val
+  - Число примеров test
+  - Число примеров train
+  - Число примеров val
+
+# ── Colors (Excel hex, without #) ─────────────────────────────────────────────
+
+colors:
+  header: "BDD7EE"    # soft blue   – header row background
+  mean: "FFFFCC"      # soft yellow – 'Среднее' row background
+  positive: "C6EFCE"  # green       – improvement on comparison sheet
+  negative: "FFC7CE"  # red         – degradation on comparison sheet
+
+# ── Sheet names ────────────────────────────────────────────────────────────────
+
+sheet_names:
+  model1: "Новая модель"
+  model2: "Прод модель"
+  comparison: "Сравнение"
+  excluded: "Удаленные классы"
+
+# ── Business report app constants ─────────────────────────────────────────────
+
+business:
+  # Source column names as they appear in the raw Excel input files.
+  perebrak_col: "perebrak"
+  nedobrak_col: "nedobrak"
+  f1_col: "f1_score"
+
+  # Display names (Russian) for the four binary goal columns added on sheets 1 & 2.
+  col_perebrak_target: "Перебраковка в целях"
+  col_nedobrak_target: "Недобраковка в целях"
+  col_perebrak_gross: "Перебраковка грубо не в целях"
+  col_nedobrak_gross: "Недобраковка грубо не в целях"
+
+  # Column name translations applied to Excel headers in the business report.
+  # Columns absent from this map keep their original names.
+  # Do NOT list: tp, fp, fn, precision, recall, f1_score, ap50, ap75, ap50_95
+  column_translations:
+    ID: "ID"
+    confidence: "Порог"
+    perebrak: "Перебраковка, %"
+    nedobrak: "Недобраковка, %"
+    Количество примеров test: "Число примеров test"
+    Количество примеров train: "Число примеров train"
+    Количество примеров val: "Число примеров val"

@@ -1,0 +1,18 @@
+# ── User settings ─────────────────────────────────────────────────────────────
+# Edit this file to tune report behaviour.  All other constants (column names,
+# colours, sheet names, translations) live in app_config.yaml.
+
+# Classes with fewer training examples than this are excluded from metric
+# sheets and listed on the 'Удаленные классы' sheet instead.
+min_train_count: 20
+
+# Absolute-difference threshold for "significant degradation" on the dev
+# comparison sheet.  Cells beyond this threshold are coloured red.
+degradation_threshold: 0.05
+
+# Business report targets and thresholds.
+business:
+  target_perebrak: 0.3          # цель перебраковки
+  target_nedobrak: 0.2          # цель недобраковки
+  comparison_pct_threshold: 5.0 # pct-point threshold for red/green on Сравнение
+  verdict_score_threshold: 0.05 # relative-diff threshold for score 1 vs 2
