@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ..app_config import CLASS_COL, REASON_COL, TRAIN_COUNT_DISPLAY_COL
 from ..config import Config
-from .reader import CLASS_COL
-
-TRAIN_COUNT_DISPLAY_COL = 'Число примеров'
 
 
 def _find_train_col(df: pd.DataFrame) -> str | None:
@@ -30,10 +28,13 @@ class ClassFilter:
         self._min_train_count = config.min_train_count
 
     def split(self, df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Return (included_df, excluded_summary_df)."""
+        """Return (included_df, excluded_summary_df).
+
+        excluded_summary_df columns: CLASS_COL, TRAIN_COUNT_DISPLAY_COL, REASON_COL.
+        """
         train_col = _find_train_col(df)
         if train_col is None:
-            return df, pd.DataFrame(columns=[CLASS_COL, TRAIN_COUNT_DISPLAY_COL])
+            return df, pd.DataFrame(columns=[CLASS_COL, TRAIN_COUNT_DISPLAY_COL, REASON_COL])
 
         counts = pd.to_numeric(df[train_col], errors='coerce').fillna(0)
         mask = counts > self._min_train_count
@@ -41,11 +42,50 @@ class ClassFilter:
         included = df[mask].reset_index(drop=True)
         excluded_raw = df[~mask].reset_index(drop=True)
 
-        summary_cols = [CLASS_COL, train_col]
-        if 'ID' in df.columns:
-            summary_cols = ['ID', CLASS_COL, train_col]
-        excluded = excluded_raw[summary_cols].rename(columns={train_col: TRAIN_COUNT_DISPLAY_COL})
+        excluded = excluded_raw[[CLASS_COL, train_col]].rename(
+            columns={train_col: TRAIN_COUNT_DISPLAY_COL}
+        )
+        excluded[REASON_COL] = f'Мало примеров train (≤ {self._min_train_count})'
         return included, excluded
+
+
+def exclude_unmatched(
+    df1: pd.DataFrame, df2: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Remove classes absent from either model and return an excluded summary.
+
+    Returns (df1_common, df2_common, excluded_unmatched_df) where
+    excluded_unmatched_df has columns CLASS_COL, TRAIN_COUNT_DISPLAY_COL, REASON_COL.
+    """
+    classes1 = set(df1[CLASS_COL])
+    classes2 = set(df2[CLASS_COL])
+    only_in_1 = classes1 - classes2
+    only_in_2 = classes2 - classes1
+
+    train_col1 = _find_train_col(df1)
+    train_col2 = _find_train_col(df2)
+
+    rows: list[dict] = []
+    for cls in sorted(only_in_1):
+        row = df1.loc[df1[CLASS_COL] == cls].iloc[0]
+        count = row[train_col1] if train_col1 else None
+        rows.append(
+            {CLASS_COL: cls, TRAIN_COUNT_DISPLAY_COL: count, REASON_COL: 'Только в новой модели'}
+        )  # noqa: E501
+    for cls in sorted(only_in_2):
+        row = df2.loc[df2[CLASS_COL] == cls].iloc[0]
+        count = row[train_col2] if train_col2 else None
+        rows.append(
+            {CLASS_COL: cls, TRAIN_COUNT_DISPLAY_COL: count, REASON_COL: 'Только в прод модели'}
+        )  # noqa: E501
+
+    cols = [CLASS_COL, TRAIN_COUNT_DISPLAY_COL, REASON_COL]
+    excluded_unmatched = pd.DataFrame(rows, columns=cols)
+
+    common = classes1 & classes2
+    df1_common = df1[df1[CLASS_COL].isin(common)].reset_index(drop=True)
+    df2_common = df2[df2[CLASS_COL].isin(common)].reset_index(drop=True)
+    return df1_common, df2_common, excluded_unmatched
 
 
 class MeanRowCalculator:

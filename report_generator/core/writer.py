@@ -10,8 +10,8 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from ..app_config import CLASS_COL
 from ..config import Config
-from .reader import CLASS_COL
 
 # ── Static style constants (not configurable) ──────────────────────────────────
 
@@ -92,7 +92,8 @@ class ExcelSheetWriter:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def write(self, ws: Worksheet, df: pd.DataFrame, sheet_title: str = '') -> None:
+    def write(self, ws: Worksheet, df: pd.DataFrame, sheet_title: str = '') -> int:
+        """Write *df* to *ws* and return the last data row index (1-based)."""
         row_offset = 0
 
         if sheet_title:
@@ -104,6 +105,8 @@ class ExcelSheetWriter:
         self._write_rows(ws, df, row_offset)
         self._autofit_columns(ws)
         self._freeze_header(ws, row_offset)
+
+        return row_offset + len(df) + 1  # header row + data rows
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
@@ -164,6 +167,30 @@ class ExcelSheetWriter:
 
     def _freeze_header(self, ws: Worksheet, row_offset: int) -> None:
         ws.freeze_panes = ws.cell(row_offset + 2, 2)
+
+
+# ── Legend writers ─────────────────────────────────────────────────────────────
+
+
+def write_comparison_legend(ws: Worksheet, start_row: int, config: Config) -> None:
+    """Write a colour legend for the comparison sheet starting at *start_row*."""
+    pos_fill = _fill(config.colors.positive)
+    neg_fill = _fill(config.colors.negative)
+
+    label = ws.cell(start_row, 1, 'Легенда:')
+    label.font = Font(bold=True, name='Calibri')
+
+    entries = [
+        (pos_fill, 'Улучшение'),
+        (neg_fill, f'Значительное ухудшение (абс. разница > {config.degradation_threshold})'),
+        (None, 'Незначительное изменение'),
+    ]
+    for i, (fill, text) in enumerate(entries, start_row + 1):
+        color_cell = ws.cell(i, 1)
+        if fill is not None:
+            color_cell.fill = fill
+        text_cell = ws.cell(i, 2, text)
+        text_cell.font = Font(name='Calibri')
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

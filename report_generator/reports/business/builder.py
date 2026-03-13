@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 from openpyxl import Workbook
 
 from ...config import Config
+from ...core.calculator import exclude_unmatched
 from ...core.reader import MetricsReader
-from ...core.writer import ExcelSheetWriter
+from ...core.writer import ExcelSheetWriter, write_comparison_legend
 from ..base import BaseReportBuilder
 from .utils import (
     add_goal_columns,
@@ -55,8 +57,11 @@ class BusinessReportBuilder(BaseReportBuilder):
         df1_raw = self.model1_reader.read()
         df2_raw = self.model2_reader.read()
 
-        df1, excluded = self._filter.split(df1_raw)
+        df1, excl_train = self._filter.split(df1_raw)
         df2, _ = self._filter.split(df2_raw)
+
+        df1, df2, excl_unmatched = exclude_unmatched(df1, df2)
+        excluded = pd.concat([excl_train, excl_unmatched], ignore_index=True)
 
         # Comparison diff (no goal columns — diff of 0/1 flags is meaningless)
         df_diff_display = translate_columns(
@@ -93,7 +98,10 @@ class BusinessReportBuilder(BaseReportBuilder):
             df2_display,
             sheet_title=f'Метрики прод модели — {self.model2_reader.file_path.name}',
         )
-        self._diff_writer.write(ws3, df_diff_display, sheet_title='Сравнение (новая − прод)')
+        last_row = self._diff_writer.write(
+            ws3, df_diff_display, sheet_title='Сравнение (новая − прод)'
+        )
+        write_comparison_legend(ws3, last_row + 2, self._config)
         write_verdict_sheet(ws_verdict, df1_goals, df2_goals, self._config)
         write_excluded_sheet(ws_excl, excluded, self._config)
 

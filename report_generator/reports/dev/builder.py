@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 from openpyxl import Workbook
 
 from ...config import Config
+from ...core.calculator import exclude_unmatched
 from ...core.reader import MetricsReader
-from ...core.writer import ExcelSheetWriter
+from ...core.writer import ExcelSheetWriter, write_comparison_legend
 from ..base import BaseReportBuilder
 from .utils import write_excluded_sheet
 
@@ -45,8 +47,11 @@ class DevReportBuilder(BaseReportBuilder):
         df1_raw.insert(1, 'ID', range(len(df1_raw)))
         df2_raw.insert(1, 'ID', range(len(df2_raw)))
 
-        df1, excluded = self._filter.split(df1_raw)
+        df1, excl_train = self._filter.split(df1_raw)
         df2, _ = self._filter.split(df2_raw)
+
+        df1, df2, excl_unmatched = exclude_unmatched(df1, df2)
+        excluded = pd.concat([excl_train, excl_unmatched], ignore_index=True)
 
         # Comparison: drop ID to avoid it appearing as a numeric diff.
         df_diff = self._cmp_calc.compute(df1.drop(columns=['ID']), df2.drop(columns=['ID']))
@@ -72,11 +77,12 @@ class DevReportBuilder(BaseReportBuilder):
             df2_with_mean,
             sheet_title=f'Метрики прод модели — {self.model2_reader.file_path.name}',
         )
-        self._diff_writer.write(
+        last_row = self._diff_writer.write(
             ws3,
             df_diff_with_mean,
             sheet_title='Сравнение (новая − прод)',
         )
+        write_comparison_legend(ws3, last_row + 2, self._config)
         write_excluded_sheet(ws4, excluded, self._config)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

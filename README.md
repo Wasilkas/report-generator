@@ -6,13 +6,15 @@ Builds formatted Excel comparison reports from two model metrics files.
 
 - **Dev report** — 4-sheet Excel workbook:
   - Sheet 1 & 2: per-class metrics for each model (precision, recall, F1, AP50, AP75, AP50-95), colour-coded headers and a weighted mean row
-  - Sheet 3 (*Сравнение*): side-by-side diff with green/red highlights for improvements and degradations beyond a configurable threshold
-  - Sheet 4 (*Удаленные классы*): classes excluded due to insufficient training examples
+  - Sheet 3 (*Сравнение*): side-by-side diff with green/red highlights for improvements and degradations beyond a configurable threshold; includes a colour legend
+  - Sheet 4 (*Удаленные классы*): classes excluded due to insufficient training examples or absent from one of the models, with a reason column
 
 - **Business report** — stakeholder-friendly view:
   - Perebrak / nedobrak columns converted to percentages
   - Binary goal flags: whether each class meets the configured perebrak/nedobrak targets
-  - Verdict sheet summarising model comparison with a score
+  - Verdict sheet summarising model comparison with a 0/1/2 score and a score legend
+
+- **Class name matching** — only classes present in both models are compared; unmatched classes go to the excluded sheet with a reason (`Только в новой модели` / `Только в прод модели`)
 
 - **Configurable** — thresholds, targets, colours, and sheet names are controlled via a YAML config file. Override any subset of keys without touching the defaults.
 

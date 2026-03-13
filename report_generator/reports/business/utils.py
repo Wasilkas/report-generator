@@ -9,8 +9,8 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from ...app_config import CLASS_COL, REASON_COL, TRAIN_COUNT_DISPLAY_COL
 from ...config import BusinessConfig, Config
-from ...core.reader import CLASS_COL
 from ...core.writer import (
     _CENTER,
     _DEFAULT_FONT,
@@ -138,9 +138,9 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
     header_fill = _fill(config.colors.header)
     trans = config.business.column_translations
 
-    ws.cell(1, 1, 'Удаленные классы (число примеров train ≤ порога)').font = Font(
-        bold=True, size=13, name='Calibri'
-    )
+    ws.cell(
+        1, 1, f'Удаленные классы (число примеров train ≤ {config.min_train_count})'
+    ).font = Font(bold=True, size=13, name='Calibri')
 
     for c_idx, col in enumerate(excluded.columns, 1):
         display = trans.get(col, col) if col != CLASS_COL else None
@@ -158,7 +158,7 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
             if isinstance(val, (int, float)):
                 cell.number_format = '0'
 
-    col_widths = {'ID': 8, CLASS_COL: 30}
+    col_widths = {CLASS_COL: 30, TRAIN_COUNT_DISPLAY_COL: 22, REASON_COL: 45}
     for c_idx, col in enumerate(excluded.columns, 1):
         ws.column_dimensions[get_column_letter(c_idx)].width = col_widths.get(col, 20)
 
@@ -312,3 +312,18 @@ def write_verdict_sheet(
     for col_letter in ['B', 'C', 'D', 'E']:
         ws.column_dimensions[col_letter].width = 22
     ws.freeze_panes = ws.cell(3, 1)
+
+    legend_start = total_row + 2
+    label = ws.cell(legend_start, 1, 'Легенда (Итого):')
+    label.font = Font(bold=True, name='Calibri')
+    legend_entries = [
+        (neg_fill, '0 — Хуже'),
+        (None, '1 — Незначительно лучше'),
+        (pos_fill, '2 — Лучше'),
+    ]
+    for i, (fill, text) in enumerate(legend_entries, legend_start + 1):
+        cell = ws.cell(i, 1, text)
+        cell.font = Font(name='Calibri')
+        cell.alignment = _LEFT
+        if fill is not None:
+            cell.fill = fill

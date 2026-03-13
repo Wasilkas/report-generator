@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-CLASS_COL = 'Класс'
+from ..app_config import CLASS_COL
 
 
 class MetricsReader:
