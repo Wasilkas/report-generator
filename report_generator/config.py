@@ -4,8 +4,8 @@ Default values live in  <project-root>/config.yaml.
 Pass a custom YAML to Config.load(path) to override any subset of keys.
 """
 
-from __future__ import annotations
-
+import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,7 @@ class SheetNamesConfig:
     model2: str
     comparison: str
     excluded: str
+    verdict: str
 
     @classmethod
     def _from_dict(cls, d: dict[str, str]) -> 'SheetNamesConfig':
@@ -54,6 +55,7 @@ class SheetNamesConfig:
             model2=d['model2'],
             comparison=d['comparison'],
             excluded=d['excluded'],
+            verdict=d['verdict'],
         )
 
 
@@ -141,15 +143,16 @@ class Config:
             Path to a user-supplied YAML file with additional overrides.
         """
         with open(_APP_CONFIG_YAML, encoding='utf-8') as fh:
-            data: dict[str, Any] = yaml.safe_load(fh) or {}
+            data: dict[str, Any] = _mapping(yaml.safe_load(fh), 'app config')
 
         with open(_USER_CONFIG_YAML, encoding='utf-8') as fh:
-            data = _deep_merge(data, yaml.safe_load(fh) or {})
+            data = _deep_merge(data, _mapping(yaml.safe_load(fh), 'config'), validate_keys=False)
 
         if path is not None:
             with open(path, encoding='utf-8') as fh:
-                data = _deep_merge(data, yaml.safe_load(fh) or {})
+                data = _deep_merge(data, _mapping(yaml.safe_load(fh), 'config'))
 
+        _validate(data)
         return cls._from_dict(data)
 
     @classmethod
@@ -171,12 +174,167 @@ class Config:
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def _deep_merge(base: dict, override: dict, *, validate_keys: bool = True) -> dict:
     """Recursively merge *override* into a copy of *base*."""
+    override = _mapping(override, 'configuration override')
+    unknown = set(override) - set(base)
+    if validate_keys and unknown:
+        raise ValueError(f'Unknown configuration keys: {sorted(unknown)}')
     result = base.copy()
     for key, val in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
-            result[key] = _deep_merge(result[key], val)
+        if key == 'column_translations':
+            result[key] = {**result[key], **_mapping(val, key)}
+        elif key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val, validate_keys=validate_keys)
         else:
             result[key] = val
     return result
+
+
+def _mapping(value: object, label: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f'{label} must be a mapping')
+    if not all(isinstance(key, str) for key in value):
+        raise ValueError(f'{label} keys must be strings')
+    return value
+
+
+def _validate(data: dict) -> None:
+    def number(value: object, label: str, low: float, high: float | None = None) -> None:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < low
+            or (high is not None and value > high)
+        ):
+            raise ValueError(f'{label} must be a finite number in range {low}..{high}')
+
+    number(data['min_train_count'], 'min_train_count', 0)
+    if not isinstance(data['min_train_count'], int):
+        raise ValueError('min_train_count must be an integer')
+    number(data['degradation_threshold'], 'degradation_threshold', 0, 1)
+    for key in [
+        'excluded_from_mean',
+        'ratio_cols',
+        'int_cols',
+        'better_higher_cols',
+        'better_lower_cols',
+    ]:
+        value = data[key]
+        if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+            raise ValueError(f'{key} must be a list of nonempty column names')
+    overlap = set(data['better_higher_cols']) & set(data['better_lower_cols'])
+    if overlap:
+        raise ValueError(f'Conflicting metric directions: {sorted(overlap)}')
+    colors = _mapping(data['colors'], 'colors')
+    for key, value in colors.items():
+        if not isinstance(value, str) or not re.fullmatch(
+            r'[0-9a-fA-F]{6}([0-9a-fA-F]{2})?', value
+        ):
+            raise ValueError(f'colors.{key} must be a 6 or 8 digit hex color')
+    names = _mapping(data['sheet_names'], 'sheet_names')
+    for key, value in names.items():
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > 31
+            or re.search(r'[\\/*?:\[\]]', value)
+            or value.startswith("'")
+            or value.endswith("'")
+        ):
+            raise ValueError(f'Invalid Excel worksheet name: sheet_names.{key}')
+    if len({value.casefold() for value in names.values()}) != len(names):
+        raise ValueError('Worksheet names must be unique (case insensitive)')
+    biz = _mapping(data['business'], 'business')
+    for key in ['target_perebrak', 'target_nedobrak', 'verdict_score_threshold']:
+        number(biz[key], f'business.{key}', 0, 1)
+    number(biz['comparison_pct_threshold'], 'business.comparison_pct_threshold', 0, 100)
+    for key, value in biz.items():
+        if key.endswith('_col') or key.startswith('col_'):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f'business.{key} must be a nonempty column name')
+    translations = _mapping(biz['column_translations'], 'business.column_translations')
+    if not all(
+        isinstance(k, str) and k and isinstance(v, str) and v.strip()
+        for k, v in translations.items()
+    ):
+        raise ValueError('column_translations must map nonempty strings to nonempty strings')
+    source_cols = [biz[key] for key in ('perebrak_col', 'nedobrak_col', 'f1_col')]
+    error_sources = {biz['perebrak_col'], biz['nedobrak_col']}
+    if (
+        error_sources & set(data['better_higher_cols'])
+        or biz['f1_col'] in data['better_lower_cols']
+    ):
+        raise ValueError('Business source role conflicts with configured metric direction')
+    metadata = set(data['int_cols']) | {
+        'Класс',
+        'ID',
+        'confidence',
+        'tp',
+        'fp',
+        'fn',
+        'Причина',
+        'Модель',
+        'Число примеров',
+    }
+    for source in source_cols:
+        identity = source.casefold()
+        if (
+            source in metadata
+            or identity in {'id', 'confidence', 'tp', 'fp', 'fn'}
+            or 'count' in identity
+            or 'пример' in identity
+            or re.search(r'(^|[_\s])n([_\s]|$)', identity)
+        ):
+            raise ValueError(f'Business source cannot alias immutable metadata: {source!r}')
+    goal_cols = [
+        biz[key]
+        for key in (
+            'col_perebrak_target',
+            'col_nedobrak_target',
+            'col_perebrak_gross',
+            'col_nedobrak_gross',
+        )
+    ]
+    reserved = set().union(
+        *[
+            set(data[key])
+            for key in (
+                'ratio_cols',
+                'int_cols',
+                'better_higher_cols',
+                'better_lower_cols',
+            )
+        ],
+        {'Класс', 'Причина', 'Модель', 'Число примеров'},
+    )
+    if (
+        len(set(source_cols)) != 3
+        or len(set(goal_cols)) != 4
+        or set(goal_cols) & (reserved | set(source_cols))
+    ):
+        raise ValueError('Generated/source column name collision')
+    identities = set().union(
+        *(
+            set(data[key])
+            for key in [
+                'excluded_from_mean',
+                'ratio_cols',
+                'int_cols',
+                'better_higher_cols',
+                'better_lower_cols',
+            ]
+        )
+    )
+    identities.update([biz[key] for key in biz if key.endswith('_col') or key.startswith('col_')])
+    identities.update(['Класс', 'Число примеров', 'Причина', 'Модель'])
+    identities.update(translations)
+    identities = {
+        key
+        for key in identities
+        if not (key not in translations and 'пример' in key and key in translations.values())
+    }
+    displayed = [translations.get(key, key) for key in identities]
+    if len(displayed) != len(set(displayed)):
+        raise ValueError('Translated column name collision')

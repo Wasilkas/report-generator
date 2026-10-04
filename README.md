@@ -1,89 +1,108 @@
 # report-generator
 
-Builds formatted Excel comparison reports from two model metrics files.
+Создаёт Excel-отчёты для сравнения новой и рабочей моделей из двух файлов метрик.
+Режим `dev` содержит метрики моделей, сравнение и исключённые классы; `business`
+добавляет цели и вердикт для выкатки.
 
-## Features
-
-- **Dev report** — 4-sheet Excel workbook:
-  - Sheet 1 & 2: per-class metrics for each model (precision, recall, F1, AP50, AP75, AP50-95), colour-coded headers and a weighted mean row
-  - Sheet 3 (*Сравнение*): side-by-side diff with green/red highlights for improvements and degradations beyond a configurable threshold; includes a colour legend
-  - Sheet 4 (*Удаленные классы*): classes excluded due to insufficient training examples or absent from one of the models, with a reason column
-
-- **Business report** — stakeholder-friendly view:
-  - Perebrak / nedobrak columns converted to percentages
-  - Binary goal flags: whether each class meets the configured perebrak/nedobrak targets
-  - Verdict sheet summarising model comparison with a 0/1/2 score and a score legend
-
-- **Class name matching** — only classes present in both models are compared; unmatched classes go to the excluded sheet with a reason (`Только в новой модели` / `Только в прод модели`)
-
-- **Configurable** — thresholds, targets, colours, and sheet names are controlled via a YAML config file. Override any subset of keys without touching the defaults.
-
-## Installation
+## Установка и запуск
 
 ```bash
 pip install git+https://github.com/Wasilkas/report-generator.git
-```
 
-Or, for development:
-
-```bash
-git clone https://github.com/Wasilkas/report-generator.git
-cd report-generator
-pip install -e .
-```
-
-## Usage
-
-```bash
-# Developer report (default config)
 generate-report dev model_new.xlsx model_prod.xlsx report_dev.xlsx
-
-# Business report
 generate-report business model_new.xlsx model_prod.xlsx report_business.xlsx
-
-# Select a specific sheet inside the Excel files (name or 0-based index)
-generate-report dev model_new.xlsx model_prod.xlsx out.xlsx --sheet1 "Metrics" --sheet2 1
-
-# Override config values at runtime
-generate-report --config my_config.yaml dev model_new.xlsx model_prod.xlsx out.xlsx
-```
-
-The tool is also runnable as a module:
-
-```bash
 python -m report_generator.cli dev model_new.xlsx model_prod.xlsx out.xlsx
 ```
 
-## Configuration
+Для разработки: `pip install -e .`. Проверки: `uv run --with pytest pytest -q`
+и `uv run --with ruff ruff check report_generator create_test_data.py tests`.
 
-Edit `report_generator/configs/config.yaml` to change default behaviour, or pass `--config path/to/override.yaml` to override specific keys at runtime.
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `min_train_count` | `20` | Classes with fewer training examples are excluded |
-| `degradation_threshold` | `0.05` | Absolute diff threshold for red highlighting on the comparison sheet |
-| `business.target_perebrak` | `0.3` | Perebrak goal threshold |
-| `business.target_nedobrak` | `0.2` | Nedobrak goal threshold |
-| `business.comparison_pct_threshold` | `5.0` | Pct-point threshold for red/green on the business comparison sheet |
-| `business.verdict_score_threshold` | `0.05` | Relative-diff threshold for verdict scoring |
-
-## Project structure
-
+```bash
+# Имя листа, включая числовое имя; индекс начинается с нуля
+ generate-report dev new.xlsx prod.xlsx out.xlsx --sheet1 name:1 --sheet2 index:0
+# Частичное переопределение конфигурации
+ generate-report --config custom.yaml business new.xlsx prod.xlsx out.xlsx
+# Явное разрешение заменить существующий отчёт
+ generate-report dev new.xlsx prod.xlsx out.xlsx --force
+# Детерминированные примеры в выбранных файлах
+ python create_test_data.py samples/new.xlsx samples/prod.xlsx
 ```
-report_generator/
-    cli.py          # Click CLI entry point
-    config.py       # Config loader (YAML → frozen dataclasses)
-    configs/        # Bundled default YAML files
-    core/
-        reader.py       # MetricsReader — reads Excel into DataFrames
-        calculator.py   # Mean row and comparison calculators
-        writer.py       # ExcelSheetWriter — writes/styles sheets
-    reports/
-        base.py         # BaseReportBuilder (abstract)
-        dev/
-            builder.py  # DevReportBuilder
-            utils.py    # Sheet helpers for the dev report
-        business/
-            builder.py  # BusinessReportBuilder
-            utils.py    # Data prep and verdict helpers
-```
+
+Без префикса числовой селектор означает индекс, другой текст — имя листа.
+Существующий выходной файл требует `--force`; API `build(path, overwrite=True)`
+разрешает замену. Выход никогда не может совпадать с входом, включая символьные
+и жёсткие ссылки. Генератор примеров также требует `--force` для замены, проверяет
+оба назначения перед записью, отвергает вложенные назначения (один файл не может
+быть родителем другого) и ничего не создаёт при импорте.
+
+## Данные и расчёты
+
+Первый столбец — имя класса. Пробелы по краям удаляются; повторяющиеся после
+нормализации имена отвергаются. Пустые, числовые и похожие на числа текстовые
+значения (например, `0.5`, `1e-3`) считаются строками порогов и удаляются.
+Полностью числовые текстовые имена классов не поддерживаются. Существующие
+уникальные непустые строковые или конечные числовые `ID` сохраняются; в `dev`
+при отсутствии столбца идентификаторы создаются до фильтрации.
+
+Столбец количества обучения распознаётся по сочетанию `train` и `пример` в имени.
+Несколько таких столбцов — ошибка. Значения должны быть конечными неотрицательными
+целыми числами; некорректные, пустые и логические значения отвергаются. При отсутствии
+столбца появляется предупреждение, фильтрация по количеству отключается. Включаются
+классы с количеством **не меньше** `min_train_count`, присутствующие в обеих моделях.
+Лист исключений сохраняет модель, исходное количество и все применимые причины,
+включая исключение из-за фильтрации другой модели.
+
+`Среднее` — арифметическое макросреднее конечных значений, без взвешивания по
+количеству примеров. Дополнительные столбцы `<метрика> coverage` показывают в строке
+среднего `доступные/все` включённые классы. Пустые метрики, включая намеренные `NaN`
+в AP, остаются пустыми; бесконечности не участвуют в среднем. `excluded_from_mean`
+управляет только средними. Сравнение показывает `новая − прод` для метрик; `ID`,
+количества (включая столбцы с `count`, `пример` и отдельным `n` в имени), `confidence`
+и целочисленные служебные столбцы исключены. Недоступный операнд даёт пустую разницу
+без окраски улучшения.
+
+Бизнес-метрики F1, перебраковка и недобраковка задаются долями `[0, 1]`.
+Источники перебраковки/недобраковки не могут входить в `better_higher_cols`,
+а источник F1 — в `better_lower_cols`; такие конфликты отвергаются.
+Некорректные, отсутствующие и логические значения становятся недоступными с
+предупреждением; флаги для них остаются пустыми. Цель достигнута при `значение ≤ цель`.
+Грубое нарушение означает `значение > 2 × цель`; агрегат считает нарушение хотя бы
+одного из двух показателей. В бизнес-отчёте перебраковка и недобраковка умножаются
+на 100, поэтому разницы измеряются в процентных пунктах.
+
+Для вердикта обязательны все три критерия: макро-F1, доля классов в обеих целях и
+доля классов с хотя бы одним грубым нарушением. Отсутствие обязательного значения
+у любого включённого класса даёт `Недостаточно данных`, даже при конечном среднем.
+Относительная разница равна `(новая − прод) / |прод|`; при нулевой базе она недоступна.
+Равенство даёт 1, включая нулевой порог. Переход от нуля к положительному значению
+даёт 2 для критерия «больше — лучше» и 0 для «меньше — лучше». Любое ухудшение даёт 0;
+улучшение меньше порога — 1, на пороге и выше — 2. Выкатка возможна при наличии
+хотя бы одной оценки 2 и отсутствии 0 среди всех трёх критериев.
+
+## Конфигурация и диагностика
+
+Настройки загружаются из встроенных YAML и частичного файла `--config`.
+Неизвестные ключи, `null`, неверные формы, логические значения вместо чисел,
+нечисловые/бесконечные пороги, конфликтующие направления метрик, пересечения
+создаваемых столбцов и переведённых имён, бизнес-источники, совпадающие с классом,
+ID или служебными количествами/порогом confidence, неверные и повторяющиеся имена листов
+отвергаются. Для названий листов действуют ограничения Excel: до 31 символа,
+без `\\ / * ? : [ ]`; имена уникальны без учёта регистра. Переименования столбцов
+сохраняют формат чисел, направление окраски, заголовки и оформление среднего.
+
+| Настройка | По умолчанию | Единицы |
+| --- | --- | --- |
+| `min_train_count` | `20` | Неотрицательное целое количество |
+| `degradation_threshold` | `0.05` | Абсолютная разница долей, `[0, 1]` |
+| `business.target_perebrak` | `0.3` | Доля, `[0, 1]` |
+| `business.target_nedobrak` | `0.2` | Доля, `[0, 1]` |
+| `business.comparison_pct_threshold` | `5.0` | Процентные пункты, `[0, 100]` |
+| `business.verdict_score_threshold` | `0.05` | Относительное улучшение, `[0, 1]` |
+| `sheet_names.verdict` | `Вердикт` | Имя листа вердикта |
+
+Зелёный цвет сравнения означает улучшение; красный — ухудшение строго больше
+соответствующего абсолютного порога. Ожидаемые ошибки файлов, конфигурации,
+листов и данных CLI показывает как `Error:` с причиной. Проверьте указанные файл,
+лист, класс или ключ; для замены отчёта используйте явный флаг.
+
+Решения и проверка исправлений описаны в [реестре исправлений](docs/remediation-20261004.md).

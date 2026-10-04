@@ -1,6 +1,8 @@
 """MeanRowCalculator, ComparisonCalculator, ClassFilter."""
 
-from __future__ import annotations
+import math
+import re
+import warnings
 
 import pandas as pd
 
@@ -10,17 +12,18 @@ from ..config import Config
 
 def _find_train_col(df: pd.DataFrame) -> str | None:
     """Return the column that holds the training-set example count, or None."""
-    for col in df.columns:
-        s = str(col).lower()
-        if 'train' in s and ('примеров' in s or 'пример' in s):
-            return col
-    return None
+    candidates = [
+        col for col in df.columns if 'train' in str(col).lower() and 'пример' in str(col).lower()
+    ]
+    if len(candidates) > 1:
+        raise ValueError(f'Multiple training count columns: {candidates}')
+    return candidates[0] if candidates else None
 
 
 class ClassFilter:
     """Splits a DataFrame into included and excluded classes.
 
-    Classes with training-example count <= config.min_train_count are excluded.
+    Classes with training-example count < config.min_train_count are excluded.
     The excluded DataFrame keeps ID (if present), class name, and train count.
     """
 
@@ -34,10 +37,24 @@ class ClassFilter:
         """
         train_col = _find_train_col(df)
         if train_col is None:
+            warnings.warn(
+                'No recognized training count column; training filter disabled',
+                UserWarning,
+                stacklevel=2,
+            )
             return df, pd.DataFrame(columns=[CLASS_COL, TRAIN_COUNT_DISPLAY_COL, REASON_COL])
 
-        counts = pd.to_numeric(df[train_col], errors='coerce').fillna(0)
-        mask = counts > self._min_train_count
+        counts = pd.to_numeric(df[train_col], errors='coerce')
+        invalid = (
+            ~counts.map(lambda value: pd.notna(value) and math.isfinite(value))
+            | (counts < 0)
+            | (counts % 1 != 0)
+            | df[train_col].map(lambda value: isinstance(value, bool))
+        )
+        if invalid.any():
+            classes = df.loc[invalid, CLASS_COL].tolist()
+            raise ValueError(f'Invalid training counts in {train_col!r} for classes: {classes}')
+        mask = counts >= self._min_train_count
 
         included = df[mask].reset_index(drop=True)
         excluded_raw = df[~mask].reset_index(drop=True)
@@ -45,7 +62,7 @@ class ClassFilter:
         excluded = excluded_raw[[CLASS_COL, train_col]].rename(
             columns={train_col: TRAIN_COUNT_DISPLAY_COL}
         )
-        excluded[REASON_COL] = f'Мало примеров train (≤ {self._min_train_count})'
+        excluded[REASON_COL] = f'Мало примеров train (< {self._min_train_count})'
         return included, excluded
 
 
@@ -97,6 +114,7 @@ class MeanRowCalculator:
 
     def __init__(self, config: Config) -> None:
         self._excluded_from_mean = config.excluded_from_mean
+        self._metric_cols = config.ratio_cols | config.better_higher_cols | config.better_lower_cols
 
     def append_mean_row(self, df: pd.DataFrame) -> pd.DataFrame:
         mean_series = self._compute(df)
@@ -111,8 +129,16 @@ class MeanRowCalculator:
             if col in self._excluded_from_mean:
                 row[col] = None
                 continue
-            numeric = pd.to_numeric(df[col], errors='coerce')
-            row[col] = numeric.mean() if numeric.notna().any() else None
+            numeric = pd.to_numeric(df[col], errors='coerce').replace(
+                [math.inf, -math.inf], float('nan')
+            )
+            finite = numeric.dropna()
+            row[col] = float((finite / len(finite)).sum()) if len(finite) else None
+            if col in self._metric_cols or numeric.notna().any() or df[col].isna().all():
+                coverage = f'{col} coverage'
+                if coverage in df.columns:
+                    raise ValueError(f'Generated coverage column collision: {coverage}')
+                row[coverage] = f'{numeric.notna().sum()}/{len(df)}'
 
         return pd.Series(row)
 
@@ -120,13 +146,13 @@ class MeanRowCalculator:
 class ComparisonCalculator:
     """Computes metric differences between model1 and model2 (model1 − model2).
 
-    Columns in config.excluded_from_mean (counts, tp/fp/fn, confidence) are
-    kept from model1 unchanged so that the 'Среднее' filter still works.
-    Only classes present in both files are included.
+    Counts, IDs, confidence and nonnumeric columns are omitted. Unavailable
+    operands remain unavailable differences. Only shared classes are included.
     """
 
     def __init__(self, config: Config) -> None:
-        self._excluded_from_mean = config.excluded_from_mean
+        self._non_metrics = config.int_cols | {'ID', 'confidence', 'tp', 'fp', 'fn'}
+        self._metrics = config.ratio_cols | config.better_higher_cols | config.better_lower_cols
 
     def compute(self, df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
         idx1 = df1.set_index(CLASS_COL)
@@ -136,14 +162,20 @@ class ComparisonCalculator:
         idx1 = idx1.loc[common].copy()
         idx2 = idx2.loc[common]
 
-        for col in idx1.columns:
-            if col in self._excluded_from_mean:
+        result = pd.DataFrame(index=common)
+        for col in idx1.columns.union(idx2.columns, sort=False):
+            identity = str(col).casefold()
+            is_count = (
+                'пример' in identity
+                or 'count' in identity
+                or re.search(r'(^|[_\s])n([_\s]|$)', identity) is not None
+            )
+            if col in self._non_metrics or is_count:
                 continue
-            if col not in idx2.columns:
-                continue
-            v1 = pd.to_numeric(idx1[col], errors='coerce')
-            v2 = pd.to_numeric(idx2[col], errors='coerce')
-            if v1.notna().any() and v2.notna().any():
-                idx1[col] = v1 - v2
-
-        return idx1.reset_index()
+            raw1 = idx1[col] if col in idx1 else pd.Series(float('nan'), index=common)
+            raw2 = idx2[col] if col in idx2 else pd.Series(float('nan'), index=common)
+            v1 = pd.to_numeric(raw1, errors='coerce').replace([math.inf, -math.inf], float('nan'))
+            v2 = pd.to_numeric(raw2, errors='coerce').replace([math.inf, -math.inf], float('nan'))
+            if col in self._metrics or v1.notna().any() or v2.notna().any():
+                result[col] = (v1 - v2).replace([math.inf, -math.inf], float('nan'))
+        return result.reset_index()
