@@ -14,9 +14,9 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
     header_fill = PatternFill('solid', fgColor=config.colors.header)
     center = Alignment(horizontal='center', vertical='center')
 
-    ws.cell(1, 1, 'Исключенные классы — причины и исходные модели').font = Font(
-        bold=True, size=13, name='Calibri'
-    )
+    ws.cell(
+        1, 1, 'Исключенные из попарного сравнения классы — причины и исходные модели'
+    ).font = Font(bold=True, size=13, name='Calibri')
 
     display = {CLASS_COL: 'Класс'}
     for c_idx, col in enumerate(excluded.columns, 1):

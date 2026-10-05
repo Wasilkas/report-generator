@@ -4,6 +4,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
+from ...app_config import CLASS_COL
 from ...config import Config
 from ...core.reader import MetricsReader
 from ...core.writer import ExcelSheetWriter, write_comparison_legend
@@ -64,26 +65,25 @@ class BusinessReportBuilder(BaseReportBuilder):
         df1_goals = add_goal_columns(df1, biz)
         df2_goals = add_goal_columns(df2, biz)
 
-        # Comparison diff (no goal columns — diff of 0/1 flags is meaningless)
+        classes = sorted(set(df1[CLASS_COL]) | set(df2[CLASS_COL]))
+        population_note = self._population_note(df1, df2)
+        # Verdict inputs remain unpadded; placeholders must not alter denominators.
         df_diff_display = translate_columns(
             to_percentage(
-                self._mean_calc.append_mean_row(
-                    self._cmp_calc.compute(
-                        df1_goals.drop(columns=biz.goal_cols), df2_goals.drop(columns=biz.goal_cols)
-                    )
+                self._comparison_with_mean(
+                    df1_goals.drop(columns=biz.goal_cols),
+                    df2_goals.drop(columns=biz.goal_cols),
+                    classes,
                 ),
                 biz,
             ),
             translations,
         )
-
-        # Goal columns on sheets 1 & 2
-
         df1_display = translate_columns(
-            to_percentage(self._mean_calc.append_mean_row(df1_goals), biz), translations
+            to_percentage(self._display_with_mean(df1_goals, classes), biz), translations
         )
         df2_display = translate_columns(
-            to_percentage(self._mean_calc.append_mean_row(df2_goals), biz), translations
+            to_percentage(self._display_with_mean(df2_goals, classes), biz), translations
         )
 
         wb = Workbook()
@@ -110,6 +110,8 @@ class BusinessReportBuilder(BaseReportBuilder):
         write_comparison_legend(ws3, last_row + 2, self._config, business=True)
         write_verdict_sheet(ws_verdict, df1_goals, df2_goals, self._config)
         write_excluded_sheet(ws_excl, excluded, self._config)
+        for ws in (ws1, ws2, ws3, ws_verdict):
+            ws.cell(ws.max_row + 2, 1, population_note)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(output_path)

@@ -109,7 +109,8 @@ class MeanRowCalculator:
     """Appends a 'Среднее' row to a DataFrame.
 
     Assumes low-training-count classes have already been removed by
-    ClassFilter.  Columns listed in config.excluded_from_mean are left blank.
+    ClassFilter. Columns listed in config.excluded_from_mean remain missing internally
+    and are displayed as NA.
     """
 
     def __init__(self, config: Config) -> None:
@@ -147,7 +148,8 @@ class ComparisonCalculator:
     """Computes metric differences between model1 and model2 (model1 − model2).
 
     Counts, IDs, confidence and nonnumeric columns are omitted. Unavailable
-    operands remain unavailable differences. Only shared classes are included.
+    operands remain unavailable differences. All eligible classes are included;
+    missing operands remain numeric NaN.
     """
 
     def __init__(self, config: Config) -> None:
@@ -158,11 +160,11 @@ class ComparisonCalculator:
         idx1 = df1.set_index(CLASS_COL)
         idx2 = df2.set_index(CLASS_COL)
 
-        common = idx1.index.intersection(idx2.index)
-        idx1 = idx1.loc[common].copy()
-        idx2 = idx2.loc[common]
+        classes = idx1.index.union(idx2.index, sort=True)
+        idx1 = idx1.reindex(classes)
+        idx2 = idx2.reindex(classes)
 
-        result = pd.DataFrame(index=common)
+        result = pd.DataFrame(index=classes)
         for col in idx1.columns.union(idx2.columns, sort=False):
             identity = str(col).casefold()
             is_count = (
@@ -172,8 +174,8 @@ class ComparisonCalculator:
             )
             if col in self._non_metrics or is_count:
                 continue
-            raw1 = idx1[col] if col in idx1 else pd.Series(float('nan'), index=common)
-            raw2 = idx2[col] if col in idx2 else pd.Series(float('nan'), index=common)
+            raw1 = idx1[col] if col in idx1 else pd.Series(float('nan'), index=classes)
+            raw2 = idx2[col] if col in idx2 else pd.Series(float('nan'), index=classes)
             v1 = pd.to_numeric(raw1, errors='coerce').replace([math.inf, -math.inf], float('nan'))
             v2 = pd.to_numeric(raw2, errors='coerce').replace([math.inf, -math.inf], float('nan'))
             if col in self._metrics or v1.notna().any() or v2.notna().any():

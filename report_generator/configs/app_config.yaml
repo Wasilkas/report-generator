@@ -4,7 +4,7 @@
 
 # ── Mean row ('Среднее') ───────────────────────────────────────────────────────
 
-# Columns left blank in the 'Среднее' row (counts, ids, thresholds).
+# Columns unavailable (displayed as NA) in the 'Среднее' row (counts, ids, thresholds).
 excluded_from_mean:
   - ID
   - Количество примеров train

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-05
+
+### Fixed
+
+- Retain new and deleted classes in developer and business metric sheets, preserving
+  the available model's measurements and rendering unavailable model values and deltas as `NA`.
+- Apply training eligibility per model and calculate model means and business verdict
+  inputs before aligning display rows; disclose the model and comparison populations.
+- Preserve missing-value semantics, real zeros, class identities and neutral styling
+  for unavailable comparisons, including disjoint model vocabularies.
+
 ## [0.1.1] - 2026-10-05
 
 ### Added

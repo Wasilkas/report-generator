@@ -150,9 +150,9 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
     header_fill = _fill(config.colors.header)
     trans = config.business.column_translations
 
-    ws.cell(1, 1, 'Исключенные классы — причины и исходные модели').font = Font(
-        bold=True, size=13, name='Calibri'
-    )
+    ws.cell(
+        1, 1, 'Исключенные из попарного сравнения классы — причины и исходные модели'
+    ).font = Font(bold=True, size=13, name='Calibri')
 
     for c_idx, col in enumerate(excluded.columns, 1):
         display = trans.get(col, col)
@@ -315,7 +315,7 @@ def write_verdict_sheet(
             scores.append(score)
 
         for c_idx, val in enumerate([name, new_val, prod_val, rel_pct, score], 1):
-            cell = ws.cell(r_idx, c_idx, val)
+            cell = ws.cell(r_idx, c_idx, 'NA' if val is None else val)
             if isinstance(val, str):
                 cell.data_type = 's'
             cell.font = _DEFAULT_FONT

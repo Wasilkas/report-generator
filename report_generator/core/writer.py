@@ -127,6 +127,8 @@ class ExcelSheetWriter:
             for c_idx, col in enumerate(col_names, 1):
                 raw = row[col]
                 val = _clean(raw)
+                if val is None:
+                    val = 'NA'
                 cell = ws.cell(r_idx, c_idx)
                 cell.value = val
                 if isinstance(val, str):
@@ -135,7 +137,7 @@ class ExcelSheetWriter:
                 cell.alignment = _LEFT if col == self._class_col else _CENTER
 
                 # Fill
-                if is_mean:
+                if is_mean and val != 'NA':
                     cell.fill = self._mean_fill
                 elif self._color_fn is not None and isinstance(val, (int, float)):
                     fill = self._color_fn(col, val)
@@ -189,6 +191,7 @@ def write_comparison_legend(
         (pos_fill, 'Улучшение'),
         (neg_fill, f'Значительное ухудшение (абс. разница > {config.degradation_threshold})'),
         (None, 'Незначительное изменение'),
+        (None, 'NA — разница недоступна; цветовая оценка не применяется'),
     ]
     if business:
         entries[1] = (
@@ -208,7 +211,7 @@ def write_comparison_legend(
 
 
 def _clean(val: Any) -> Any:
-    """Convert NaN / None to None so openpyxl stores a blank cell."""
+    """Normalize unavailable values to None; the sheet writer renders them as NA."""
     if val is None:
         return None
     try:

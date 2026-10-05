@@ -76,10 +76,31 @@ class BaseReportBuilder(ABC):
         excluded = pd.DataFrame(
             rows, columns=[CLASS_COL, TRAIN_COUNT_DISPLAY_COL, REASON_COL, 'Модель']
         )
+        columns = df1.columns.union(df2.columns, sort=False)
+        return df1.reindex(columns=columns), df2.reindex(columns=columns), excluded
+
+    def _display_with_mean(self, df: pd.DataFrame, classes: list[str]) -> pd.DataFrame:
+        """Compute aggregates before adding missing display rows."""
+        own = self._mean_calc.append_mean_row(df)
+        display = df.set_index(CLASS_COL).reindex(classes).reset_index()
+        return pd.concat([display, own.iloc[[-1]]], ignore_index=True)
+
+    def _comparison_with_mean(
+        self, df1: pd.DataFrame, df2: pd.DataFrame, classes: list[str]
+    ) -> pd.DataFrame:
+        differences = self._cmp_calc.compute(df1, df2)
+        shared = set(df1[CLASS_COL]) & set(df2[CLASS_COL])
+        return self._display_with_mean(differences[differences[CLASS_COL].isin(shared)], classes)
+
+    @staticmethod
+    def _population_note(df1: pd.DataFrame, df2: pd.DataFrame) -> str:
+        shared = set(df1[CLASS_COL]) & set(df2[CLASS_COL])
         return (
-            df1[df1[CLASS_COL].isin(common)].reset_index(drop=True),
-            df2[df2[CLASS_COL].isin(common)].reset_index(drop=True),
-            excluded,
+            f'Средние и вердикт: собственный набор допустимых классов каждой модели '
+            f'(новая: {len(df1)}, прод: {len(df2)}); '
+            f'среднее разниц: общих классов {len(shared)}. '
+            'Наборы могут различаться; NA — отсутствующие или отфильтрованные данные. '
+            'Причины отсутствия сравнения приведены на листе исключений.'
         )
 
     @abstractmethod

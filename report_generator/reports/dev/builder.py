@@ -4,6 +4,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
+from ...app_config import CLASS_COL
 from ...config import Config
 from ...core.reader import MetricsReader
 from ...core.writer import ExcelSheetWriter, write_comparison_legend
@@ -47,12 +48,11 @@ class DevReportBuilder(BaseReportBuilder):
 
         df1, df2, excluded = self._prepare(df1_raw, df2_raw)
 
-        # Comparison: drop ID to avoid it appearing as a numeric diff.
-        df_diff = self._cmp_calc.compute(df1.drop(columns=['ID']), df2.drop(columns=['ID']))
-
-        df1_with_mean = self._mean_calc.append_mean_row(df1)
-        df2_with_mean = self._mean_calc.append_mean_row(df2)
-        df_diff_with_mean = self._mean_calc.append_mean_row(df_diff)
+        classes = sorted(set(df1[CLASS_COL]) | set(df2[CLASS_COL]))
+        df1_with_mean = self._display_with_mean(df1, classes)
+        df2_with_mean = self._display_with_mean(df2, classes)
+        df_diff_with_mean = self._comparison_with_mean(df1, df2, classes)
+        population_note = self._population_note(df1, df2)
 
         wb = Workbook()
         ws1 = wb.active
@@ -78,6 +78,8 @@ class DevReportBuilder(BaseReportBuilder):
         )
         write_comparison_legend(ws3, last_row + 2, self._config)
         write_excluded_sheet(ws4, excluded, self._config)
+        for ws in (ws1, ws2, ws3):
+            ws.cell(ws.max_row + 2, 1, population_note)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(output_path)

@@ -149,7 +149,7 @@ def test_verdict_zero_baselines(config, new, prod, expected):
     sheet = Workbook().active
     utils.write_verdict_sheet(sheet, frame(new), frame(prod), config)
     assert [sheet.cell(r, 5).value for r in range(3, 6)] == expected
-    assert sheet['D3'].value is None
+    assert sheet['D3'].value == 'NA'
     assert any('без изменений' in str(c.value).lower() for row in sheet for c in row)
     utils.write_verdict_sheet(sheet, frame(new).drop(columns=['f1_score']), frame(prod), config)
     assert sheet['E6'].value == 'Недостаточно данных'
@@ -329,14 +329,14 @@ def test_saved_workbook_unavailable_and_legends(tmp_path, config, mode):
     wb = load_workbook(output)
     ws = wb[config.sheet_names.comparison]
     f1 = next(c.column for c in ws[2] if c.value == 'f1_score')
-    assert ws.cell(3, f1).value is None
+    assert ws.cell(3, f1).value == 'NA'
     assert ws.cell(3, f1).fill.patternType is None
     if mode == 'business':
         assert wb[config.sheet_names.verdict]['E6'].value == 'Недостаточно данных'
         assert any('5.0 п.п.' in str(c.value) for row in ws for c in row)
     first = wb[config.sheet_names.model1]
     ap = next(c.column for c in first[2] if c.value == 'ap50')
-    assert first.cell(3, ap).value is None
+    assert first.cell(3, ap).value == 'NA'
     coverage = next(c.column for c in first[2] if c.value == 'ap50 coverage')
     assert first.cell(4, coverage).value == '0/1'
 
@@ -398,7 +398,7 @@ def test_rollout_partial_class_and_zero_gross(config):
         pd.DataFrame({'f1_score': [0.9], 'perebrak': [0.7], 'nedobrak': [0.1]}), biz
     )
     utils.write_verdict_sheet(ws, new, prod.iloc[:1], config)
-    assert ws['E5'].value == 0 and ws['D5'].value is None
+    assert ws['E5'].value == 0 and ws['D5'].value == 'NA'
     assert ws['E6'].value == 'Не к выкатке'
 
 
