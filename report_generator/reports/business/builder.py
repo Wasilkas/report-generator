@@ -1,14 +1,10 @@
 """BusinessReportBuilder: assembles the business-oriented Excel report."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
-import pandas as pd
 from openpyxl import Workbook
 
 from ...config import Config
-from ...core.calculator import exclude_unmatched
 from ...core.reader import MetricsReader
 from ...core.writer import ExcelSheetWriter, write_comparison_legend
 from ..base import BaseReportBuilder
@@ -42,36 +38,46 @@ class BusinessReportBuilder(BaseReportBuilder):
         super().__init__(model1_reader, model2_reader, config)
 
         fmt = build_format_map(config)
-        self._sheet_writer = ExcelSheetWriter(config, format_map=fmt)
+        self._sheet_writer = ExcelSheetWriter(
+            config,
+            format_map=fmt,
+            class_col=config.business.column_translations.get('Класс', 'Класс'),
+        )
         self._diff_writer = ExcelSheetWriter(
             config,
             color_fn=build_comparison_color_fn(config),
             format_map=fmt,
+            class_col=config.business.column_translations.get('Класс', 'Класс'),
         )
 
-    def build(self, output_path: str | Path) -> None:
+    def build(self, output_path: str | Path, *, overwrite: bool = False) -> None:
         output_path = Path(output_path)
+        self._check_output(output_path, overwrite)
         biz = self._config.business
         translations = dict(biz.column_translations)
 
         df1_raw = self.model1_reader.read()
         df2_raw = self.model2_reader.read()
 
-        df1, excl_train = self._filter.split(df1_raw)
-        df2, _ = self._filter.split(df2_raw)
+        df1, df2, excluded = self._prepare(df1_raw, df2_raw)
 
-        df1, df2, excl_unmatched = exclude_unmatched(df1, df2)
-        excluded = pd.concat([excl_train, excl_unmatched], ignore_index=True)
+        df1_goals = add_goal_columns(df1, biz)
+        df2_goals = add_goal_columns(df2, biz)
 
         # Comparison diff (no goal columns — diff of 0/1 flags is meaningless)
         df_diff_display = translate_columns(
-            to_percentage(self._mean_calc.append_mean_row(self._cmp_calc.compute(df1, df2)), biz),
+            to_percentage(
+                self._mean_calc.append_mean_row(
+                    self._cmp_calc.compute(
+                        df1_goals.drop(columns=biz.goal_cols), df2_goals.drop(columns=biz.goal_cols)
+                    )
+                ),
+                biz,
+            ),
             translations,
         )
 
         # Goal columns on sheets 1 & 2
-        df1_goals = add_goal_columns(df1, biz)
-        df2_goals = add_goal_columns(df2, biz)
 
         df1_display = translate_columns(
             to_percentage(self._mean_calc.append_mean_row(df1_goals), biz), translations
@@ -85,7 +91,7 @@ class BusinessReportBuilder(BaseReportBuilder):
         ws1.title = self._config.sheet_names.model1
         ws2 = wb.create_sheet(self._config.sheet_names.model2)
         ws3 = wb.create_sheet(self._config.sheet_names.comparison)
-        ws_verdict = wb.create_sheet('Вердикт')
+        ws_verdict = wb.create_sheet(self._config.sheet_names.verdict)
         ws_excl = wb.create_sheet(self._config.sheet_names.excluded)
 
         self._sheet_writer.write(
@@ -101,7 +107,7 @@ class BusinessReportBuilder(BaseReportBuilder):
         last_row = self._diff_writer.write(
             ws3, df_diff_display, sheet_title='Сравнение (новая − прод)'
         )
-        write_comparison_legend(ws3, last_row + 2, self._config)
+        write_comparison_legend(ws3, last_row + 2, self._config, business=True)
         write_verdict_sheet(ws_verdict, df1_goals, df2_goals, self._config)
         write_excluded_sheet(ws_excl, excluded, self._config)
 

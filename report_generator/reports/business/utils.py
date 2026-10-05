@@ -1,8 +1,7 @@
 """Utility functions for the business Excel report."""
 
-from __future__ import annotations
-
 import math
+import warnings
 
 import pandas as pd
 from openpyxl.styles import Font, PatternFill
@@ -28,21 +27,31 @@ def add_goal_columns(df: pd.DataFrame, biz: BusinessConfig) -> pd.DataFrame:
     """Append four binary (0/1) goal columns after the nedobrak column."""
     df = df.copy()
 
-    if biz.perebrak_col in df.columns:
-        p = pd.to_numeric(df[biz.perebrak_col], errors='coerce')
-        df[biz.col_perebrak_target] = (p < biz.target_perebrak).astype(int)
-        df[biz.col_perebrak_gross] = (p > 2 * biz.target_perebrak).astype(int)
-    else:
-        df[biz.col_perebrak_target] = None
-        df[biz.col_perebrak_gross] = None
-
-    if biz.nedobrak_col in df.columns:
-        n = pd.to_numeric(df[biz.nedobrak_col], errors='coerce')
-        df[biz.col_nedobrak_target] = (n < biz.target_nedobrak).astype(int)
-        df[biz.col_nedobrak_gross] = (n > 2 * biz.target_nedobrak).astype(int)
-    else:
-        df[biz.col_nedobrak_target] = None
-        df[biz.col_nedobrak_gross] = None
+    collisions = set(biz.goal_cols) & set(df.columns)
+    if collisions:
+        raise ValueError(f'Generated goal column collision: {sorted(collisions)}')
+    # Business criteria require finite ratios. AP NaNs stay untouched.
+    for source in [biz.f1_col, biz.perebrak_col, biz.nedobrak_col]:
+        raw = df[source] if source in df else pd.Series(float('nan'), index=df.index)
+        values = pd.to_numeric(raw, errors='coerce')
+        valid = values.map(
+            lambda value: pd.notna(value) and math.isfinite(value) and 0 <= value <= 1
+        ) & ~raw.map(lambda value: isinstance(value, bool))
+        if not valid.all() or source not in df:
+            warnings.warn(
+                f'Unavailable business values in {source!r}: '
+                f'{int((~valid).sum())}/{len(df)} classes; rollout requires all criteria',
+                UserWarning,
+                stacklevel=2,
+            )
+        df[source] = values.where(valid)
+    for source, target, goal, gross in [
+        (biz.perebrak_col, biz.target_perebrak, biz.col_perebrak_target, biz.col_perebrak_gross),
+        (biz.nedobrak_col, biz.target_nedobrak, biz.col_nedobrak_target, biz.col_nedobrak_gross),
+    ]:
+        values = df[source]
+        df[goal] = (values <= target).astype(float).where(values.notna())
+        df[gross] = (values > 2 * target).astype(float).where(values.notna())
 
     # Reorder: insert goal columns right after nedobrak
     goal_cols = biz.goal_cols
@@ -69,6 +78,8 @@ def to_percentage(df: pd.DataFrame, biz: BusinessConfig) -> pd.DataFrame:
 
 def translate_columns(df: pd.DataFrame, translations: dict[str, str]) -> pd.DataFrame:
     rename = {col: translations.get(col, col) for col in df.columns}
+    if len(set(rename.values())) != len(rename):
+        raise ValueError('Translated column name collision')
     return df.rename(columns=rename)
 
 
@@ -83,13 +94,14 @@ def build_format_map(config: Config) -> dict[str, str]:
 
     # Translated percentage columns
     for src in [biz.perebrak_col, biz.nedobrak_col]:
-        translated = trans.get(src)
-        if translated:
-            fmt[translated] = '0.00'
+        fmt[trans.get(src, src)] = '0.00'
 
     # Ratio columns (names unchanged by translation)
     for col in config.ratio_cols:
-        fmt[col] = '0.0000'
+        fmt[trans.get(col, col)] = '0.0000'
+
+    for src in [biz.perebrak_col, biz.nedobrak_col]:
+        fmt[trans.get(src, src)] = '0.00'
 
     # Integer columns (use translated names)
     for col in config.int_cols:
@@ -97,7 +109,7 @@ def build_format_map(config: Config) -> dict[str, str]:
 
     # Goal columns — 2 dp so mean row (fraction) displays nicely
     for col in biz.goal_cols:
-        fmt[col] = '0.00'
+        fmt[trans.get(col, col)] = '0.00'
 
     return fmt
 
@@ -109,10 +121,10 @@ def build_comparison_color_fn(config: Config) -> ColorFn:
     pos = _fill(config.colors.positive)
     neg = _fill(config.colors.negative)
 
-    better_higher = config.better_higher_cols
+    better_higher = {trans.get(col, col) for col in config.better_higher_cols | {biz.f1_col}}
     dth = config.degradation_threshold
 
-    pct_cols = frozenset(filter(None, [trans.get(biz.perebrak_col), trans.get(biz.nedobrak_col)]))
+    pct_cols = {trans.get(col, col) for col in [biz.perebrak_col, biz.nedobrak_col]}
     pth = biz.comparison_pct_threshold
 
     def color_fn(col: str, val: float) -> PatternFill | None:
@@ -138,13 +150,14 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
     header_fill = _fill(config.colors.header)
     trans = config.business.column_translations
 
-    ws.cell(
-        1, 1, f'Удаленные классы (число примеров train ≤ {config.min_train_count})'
-    ).font = Font(bold=True, size=13, name='Calibri')
+    ws.cell(1, 1, 'Исключенные классы — причины и исходные модели').font = Font(
+        bold=True, size=13, name='Calibri'
+    )
 
     for c_idx, col in enumerate(excluded.columns, 1):
-        display = trans.get(col, col) if col != CLASS_COL else None
+        display = trans.get(col, col)
         cell = ws.cell(2, c_idx, display)
+        cell.data_type = 's'
         cell.font = _HEADER_FONT
         cell.fill = header_fill
         cell.alignment = _CENTER
@@ -152,7 +165,9 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
     for r, (_, row) in enumerate(excluded.iterrows(), 3):
         for c_idx, col in enumerate(excluded.columns, 1):
             val = row[col]
-            cell = ws.cell(r, c_idx, val)
+            cell = ws.cell(r, c_idx, None if pd.isna(val) else val)
+            if isinstance(val, str):
+                cell.data_type = 's'
             cell.font = _DEFAULT_FONT
             cell.alignment = _CENTER
             if isinstance(val, (int, float)):
@@ -172,7 +187,14 @@ def f1_mean(df: pd.DataFrame, biz: BusinessConfig) -> float | None:
     if biz.f1_col not in df.columns:
         return None
     vals = pd.to_numeric(df[biz.f1_col], errors='coerce')
-    return float(vals.mean()) if vals.notna().any() else None
+    if (
+        len(vals) == 0
+        or not vals.map(lambda v: pd.notna(v) and math.isfinite(v) and 0 <= v <= 1).all()
+    ):
+        return None
+    if df[biz.f1_col].map(lambda value: isinstance(value, bool)).any():
+        return None
+    return float(vals.mean())
 
 
 def classes_in_target(df: pd.DataFrame, biz: BusinessConfig) -> float | None:
@@ -180,6 +202,8 @@ def classes_in_target(df: pd.DataFrame, biz: BusinessConfig) -> float | None:
         return None
     p = pd.to_numeric(df[biz.col_perebrak_target], errors='coerce')
     n = pd.to_numeric(df[biz.col_nedobrak_target], errors='coerce')
+    if not p.isin([0, 1]).all() or not n.isin([0, 1]).all():
+        return None
     both = ((p == 1) & (n == 1)).sum()
     return float(both / len(df)) if len(df) > 0 else None
 
@@ -189,12 +213,19 @@ def classes_gross_not_target(df: pd.DataFrame, biz: BusinessConfig) -> float | N
         return None
     p = pd.to_numeric(df[biz.col_perebrak_gross], errors='coerce')
     n = pd.to_numeric(df[biz.col_nedobrak_gross], errors='coerce')
-    both = ((p == 1) & (n == 1)).sum()
+    if not p.isin([0, 1]).all() or not n.isin([0, 1]).all():
+        return None
+    both = ((p == 1) | (n == 1)).sum()
     return float(both / len(df)) if len(df) > 0 else None
 
 
 def rel_diff(new_val: float | None, prod_val: float | None) -> float | None:
-    if new_val is None or prod_val is None:
+    if (
+        new_val is None
+        or prod_val is None
+        or not math.isfinite(new_val)
+        or not math.isfinite(prod_val)
+    ):
         return None
     if prod_val == 0:
         return None
@@ -204,6 +235,8 @@ def rel_diff(new_val: float | None, prod_val: float | None) -> float | None:
 def score_higher_better(rel: float | None, threshold: float) -> int | None:
     if rel is None:
         return None
+    if rel == 0:
+        return 1
     if rel < 0:
         return 0
     if rel < threshold:
@@ -214,6 +247,8 @@ def score_higher_better(rel: float | None, threshold: float) -> int | None:
 def score_lower_better(rel: float | None, threshold: float) -> int | None:
     if rel is None:
         return None
+    if rel == 0:
+        return 1
     if rel > 0:
         return 0
     if rel > -threshold:
@@ -260,6 +295,7 @@ def write_verdict_sheet(
         ['Критерий', 'Новая модель', 'Прод модель', 'Относительная разница, %', 'Итого'], 1
     ):
         cell = ws.cell(2, c_idx, h)
+        cell.data_type = 's'
         cell.font = _HEADER_FONT
         cell.fill = header_fill
         cell.alignment = _CENTER
@@ -273,11 +309,15 @@ def write_verdict_sheet(
             if direction == 'higher'
             else score_lower_better(r, threshold)
         )
+        if new_val is not None and prod_val == 0 and math.isfinite(new_val):
+            score = 1 if new_val == 0 else (2 if direction == 'higher' else 0)
         if score is not None:
             scores.append(score)
 
         for c_idx, val in enumerate([name, new_val, prod_val, rel_pct, score], 1):
             cell = ws.cell(r_idx, c_idx, val)
+            if isinstance(val, str):
+                cell.data_type = 's'
             cell.font = _DEFAULT_FONT
             cell.alignment = _CENTER if c_idx > 1 else _LEFT
             if isinstance(val, float) and not math.isnan(val):
@@ -290,7 +330,9 @@ def write_verdict_sheet(
                 elif score == 0:
                     cell.fill = neg_fill
 
-    if scores and any(s == 2 for s in scores) and all(s != 0 for s in scores):
+    if len(scores) != len(criteria):
+        verdict_text, verdict_fill = 'Недостаточно данных', neg_fill
+    elif any(s == 2 for s in scores) and all(s != 0 for s in scores):
         verdict_text, verdict_fill = 'К выкатке', pos_fill
     else:
         verdict_text, verdict_fill = 'Не к выкатке', neg_fill
@@ -318,7 +360,7 @@ def write_verdict_sheet(
     label.font = Font(bold=True, name='Calibri')
     legend_entries = [
         (neg_fill, '0 — Хуже'),
-        (None, '1 — Незначительно лучше'),
+        (None, '1 — Без изменений или незначительно лучше'),
         (pos_fill, '2 — Лучше'),
     ]
     for i, (fill, text) in enumerate(legend_entries, legend_start + 1):

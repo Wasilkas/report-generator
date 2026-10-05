@@ -1,14 +1,10 @@
 """DevReportBuilder: assembles the four-sheet developer report."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
-import pandas as pd
 from openpyxl import Workbook
 
 from ...config import Config
-from ...core.calculator import exclude_unmatched
 from ...core.reader import MetricsReader
 from ...core.writer import ExcelSheetWriter, write_comparison_legend
 from ..base import BaseReportBuilder
@@ -36,22 +32,20 @@ class DevReportBuilder(BaseReportBuilder):
         self._sheet_writer = ExcelSheetWriter(config)
         self._diff_writer = ExcelSheetWriter.with_comparison_colors(config)
 
-    def build(self, output_path: str | Path) -> None:
+    def build(self, output_path: str | Path, *, overwrite: bool = False) -> None:
         output_path = Path(output_path)
+        self._check_output(output_path, overwrite)
         names = self._config.sheet_names
 
         df1_raw = self.model1_reader.read()
         df2_raw = self.model2_reader.read()
 
         # Assign global IDs before filtering so excluded classes leave gaps.
-        df1_raw.insert(1, 'ID', range(len(df1_raw)))
-        df2_raw.insert(1, 'ID', range(len(df2_raw)))
+        for raw in (df1_raw, df2_raw):
+            if 'ID' not in raw.columns:
+                raw.insert(1, 'ID', range(len(raw)))
 
-        df1, excl_train = self._filter.split(df1_raw)
-        df2, _ = self._filter.split(df2_raw)
-
-        df1, df2, excl_unmatched = exclude_unmatched(df1, df2)
-        excluded = pd.concat([excl_train, excl_unmatched], ignore_index=True)
+        df1, df2, excluded = self._prepare(df1_raw, df2_raw)
 
         # Comparison: drop ID to avoid it appearing as a numeric diff.
         df_diff = self._cmp_calc.compute(df1.drop(columns=['ID']), df2.drop(columns=['ID']))

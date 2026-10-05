@@ -1,7 +1,5 @@
 """ExcelSheetWriter: renders a DataFrame onto an openpyxl worksheet."""
 
-from __future__ import annotations
-
 import math
 from typing import Any, Callable
 
@@ -56,10 +54,12 @@ class ExcelSheetWriter:
         config: Config,
         color_fn: ColorFn | None = None,
         format_map: dict[str, str] | None = None,
+        class_col: str = CLASS_COL,
     ) -> None:
         self._config = config
         self._color_fn = color_fn
         self._format_map = format_map
+        self._class_col = class_col
 
         self._header_fill = _fill(config.colors.header)
         self._mean_fill = _fill(config.colors.mean)
@@ -113,7 +113,8 @@ class ExcelSheetWriter:
     def _write_header(self, ws: Worksheet, df: pd.DataFrame, row_offset: int) -> None:
         for c_idx, col in enumerate(df.columns, 1):
             cell = ws.cell(row_offset + 1, c_idx)
-            cell.value = None if col == CLASS_COL else col
+            cell.value = col
+            cell.data_type = 's'
             cell.font = _HEADER_FONT
             cell.fill = self._header_fill
             cell.alignment = _CENTER
@@ -121,15 +122,17 @@ class ExcelSheetWriter:
     def _write_rows(self, ws: Worksheet, df: pd.DataFrame, row_offset: int) -> None:
         col_names = list(df.columns)
         for r_idx, (_, row) in enumerate(df.iterrows(), row_offset + 2):
-            is_mean = str(row.get(CLASS_COL, '')) == 'Среднее'
+            is_mean = str(row.get(self._class_col, '')) == 'Среднее'
 
             for c_idx, col in enumerate(col_names, 1):
                 raw = row[col]
                 val = _clean(raw)
                 cell = ws.cell(r_idx, c_idx)
                 cell.value = val
+                if isinstance(val, str):
+                    cell.data_type = 's'
                 cell.font = _MEAN_FONT if is_mean else _DEFAULT_FONT
-                cell.alignment = _LEFT if col == CLASS_COL else _CENTER
+                cell.alignment = _LEFT if col == self._class_col else _CENTER
 
                 # Fill
                 if is_mean:
@@ -172,7 +175,9 @@ class ExcelSheetWriter:
 # ── Legend writers ─────────────────────────────────────────────────────────────
 
 
-def write_comparison_legend(ws: Worksheet, start_row: int, config: Config) -> None:
+def write_comparison_legend(
+    ws: Worksheet, start_row: int, config: Config, *, business: bool = False
+) -> None:
     """Write a colour legend for the comparison sheet starting at *start_row*."""
     pos_fill = _fill(config.colors.positive)
     neg_fill = _fill(config.colors.negative)
@@ -185,6 +190,12 @@ def write_comparison_legend(ws: Worksheet, start_row: int, config: Config) -> No
         (neg_fill, f'Значительное ухудшение (абс. разница > {config.degradation_threshold})'),
         (None, 'Незначительное изменение'),
     ]
+    if business:
+        entries[1] = (
+            neg_fill,
+            f'Ухудшение: доли > {config.degradation_threshold}; '
+            f'перебраковка/недобраковка > {config.business.comparison_pct_threshold} п.п.',
+        )
     for i, (fill, text) in enumerate(entries, start_row + 1):
         color_cell = ws.cell(i, 1)
         if fill is not None:
@@ -205,6 +216,6 @@ def _clean(val: Any) -> Any:
             return None
     except (TypeError, ValueError):
         pass
-    if isinstance(val, float) and math.isnan(val):
+    if isinstance(val, float) and not math.isfinite(val):
         return None
     return val

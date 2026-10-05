@@ -76,6 +76,7 @@ sheet_names:
   model2: "Прод модель"
   comparison: "Сравнение"
   excluded: "Удаленные классы"
+  verdict: "Вердикт"
 
 # ── Business report app constants ─────────────────────────────────────────────
 
@@ -93,7 +94,7 @@ business:
 
   # Column name translations applied to Excel headers in the business report.
   # Columns absent from this map keep their original names.
-  # Do NOT list: tp, fp, fn, precision, recall, f1_score, ap50, ap75, ap50_95
+  # Custom translations retain the source column formatting and color semantics.
   column_translations:
     ID: "ID"
     confidence: "Порог"

@@ -1,7 +1,6 @@
 """MetricsReader: loads raw metrics from an Excel file into a DataFrame."""
 
-from __future__ import annotations
-
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -31,10 +30,30 @@ class MetricsReader:
         )
         # The first column has no header in source files → pandas names it
         # something like "Unnamed: 0"; rename it to a stable internal name.
+        if len(df.columns) == 0:
+            raise ValueError(f'Empty worksheet: {self.sheet_name!r} in {self.file_path}')
         first_col = df.columns[0]
         df = df.rename(columns={first_col: CLASS_COL})
 
         df = df[df[CLASS_COL].apply(_is_valid_class)].reset_index(drop=True)
+        df[CLASS_COL] = df[CLASS_COL].map(lambda value: str(value).strip())
+        duplicates = df.loc[df[CLASS_COL].duplicated(), CLASS_COL].tolist()
+        if duplicates:
+            raise ValueError(f'Duplicate normalized classes in {self.file_path}: {duplicates}')
+        if 'ID' in df.columns:
+            ids = df['ID']
+            valid = ids.map(
+                lambda value: (
+                    isinstance(value, (str, int, float))
+                    and not isinstance(value, bool)
+                    and (not isinstance(value, str) or bool(value.strip()))
+                    and (not isinstance(value, (int, float)) or math.isfinite(value))
+                )
+            )
+            if ids.isna().any() or not valid.all() or ids.duplicated().any():
+                raise ValueError(
+                    f'ID values must be nonempty unique strings or numbers: {self.file_path}'
+                )
         return df
 
     def __repr__(self) -> str:
@@ -52,4 +71,9 @@ def _is_valid_class(val: object) -> bool:
         pass
     if isinstance(val, (int, float)):
         return False
-    return str(val).strip() not in ('Среднее', '')
+    text = str(val).strip()
+    try:
+        float(text)
+    except ValueError:
+        return text not in ('Среднее', '')
+    return False

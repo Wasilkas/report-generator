@@ -1,7 +1,5 @@
 """Utility functions for the developer Excel report."""
 
-from __future__ import annotations
-
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -16,13 +14,14 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
     header_fill = PatternFill('solid', fgColor=config.colors.header)
     center = Alignment(horizontal='center', vertical='center')
 
-    ws.cell(
-        1, 1, f'Удаленные классы (число примеров train ≤ {config.min_train_count})'
-    ).font = Font(bold=True, size=13, name='Calibri')
+    ws.cell(1, 1, 'Исключенные классы — причины и исходные модели').font = Font(
+        bold=True, size=13, name='Calibri'
+    )
 
     display = {CLASS_COL: 'Класс'}
     for c_idx, col in enumerate(excluded.columns, 1):
         cell = ws.cell(2, c_idx, display.get(col, col))
+        cell.data_type = 's'
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = center
@@ -30,7 +29,9 @@ def write_excluded_sheet(ws: Worksheet, excluded: pd.DataFrame, config: Config) 
     for r, (_, row) in enumerate(excluded.iterrows(), 3):
         for c_idx, col in enumerate(excluded.columns, 1):
             val = row[col]
-            cell = ws.cell(r, c_idx, val)
+            cell = ws.cell(r, c_idx, None if pd.isna(val) else val)
+            if isinstance(val, str):
+                cell.data_type = 's'
             cell.font = Font(name='Calibri')
             cell.alignment = center
             if isinstance(val, (int, float)):
