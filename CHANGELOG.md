@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-05
+
 ### Added
 - **Class name matching** — only classes present in both models are compared. Classes absent from either model are routed to the *Удаленные классы* sheet with a reason (`Только в новой модели` / `Только в прод модели`).
 - **Reason column** (`Причина`) on the excluded-classes sheet — distinguishes low-training-count exclusions from unmatched-class exclusions.
