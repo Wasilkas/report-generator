@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "task": "Shared report extraction with additive v2 interfaces",
+  "scope": [
+    "report_generator/reports",
+    "report_generator/v2",
+    "tests",
+    "docs/plans/shared-extraction",
+    "README.md"
+  ],
+  "impact": "modules",
+  "rules": "Bounded shared package exposes generic spreadsheet operations; application evaluation and identity-schema policy stay outside. All legacy imports/signatures/configuration/CLI defaults remain available.",
+  "modules": [
+    {
+      "id": "legacy",
+      "path": "report_generator/reports",
+      "change": "modify",
+      "responsibility": "Preserve legacy builders and delegate table rendering through a compatibility hook.",
+      "interface": "Legacy signatures unchanged; v2 accepts MetricsTable plus explicit PresentationOptions, precomputed comparison rows and caller-validated metadata.",
+      "layer": "Shared spreadsheet presentation",
+      "allowed_dependencies": [
+        "report_generator",
+        "Python standard library",
+        "pandas",
+        "openpyxl"
+      ],
+      "forbidden_dependencies": [
+        "clearml_yolo",
+        "digital_metrics",
+        "clearml",
+        "torch",
+        "ultralytics"
+      ],
+      "effects": "Builders write requested workbooks and CSVs; OOXML functions read/write caller supplied packages only.",
+      "contracts": [
+        "shared-isolation"
+      ]
+    },
+    {
+      "id": "v2",
+      "path": "report_generator/v2",
+      "change": "add",
+      "responsibility": "Structured lexical metrics, explicit presentation, precomputed comparison rendering and generic OOXML operations.",
+      "interface": "Legacy signatures unchanged; v2 accepts MetricsTable plus explicit PresentationOptions, precomputed comparison rows and caller-validated metadata.",
+      "layer": "Shared spreadsheet presentation",
+      "allowed_dependencies": [
+        "report_generator",
+        "Python standard library",
+        "pandas",
+        "openpyxl"
+      ],
+      "forbidden_dependencies": [
+        "clearml_yolo",
+        "digital_metrics",
+        "clearml",
+        "torch",
+        "ultralytics"
+      ],
+      "effects": "Builders write requested workbooks and CSVs; OOXML functions read/write caller supplied packages only.",
+      "contracts": [
+        "shared-isolation"
+      ]
+    }
+  ],
+  "contracts": [
+    {
+      "id": "shared-isolation",
+      "path": "tests/test_shared_boundaries.py",
+      "status": "planned",
+      "rules": "All shared runtime modules cannot import application, evaluation SDK or inference backend, including dynamic imports. Negative injected forbidden import fails.",
+      "check": "imports"
+    }
+  ],
+  "checks": [
+    {
+      "id": "imports",
+      "kind": "imports",
+      "command": "python -m pytest -q tests/test_shared_boundaries.py",
+      "expectation": "Scoped shared imports allowed and prohibited import negative case rejected.",
+      "result": {
+        "status": "passed",
+        "exit_code": 0,
+        "evidence": "docs/plans/shared-extraction/evidence-20261012.md"
+      }
+    },
+    {
+      "id": "behavior",
+      "kind": "behavior",
+      "command": "python -m pytest -q tests",
+      "expectation": "Legacy characterization unchanged and new structured reports and generic workbook operations verified.",
+      "result": {
+        "status": "passed",
+        "exit_code": 0,
+        "evidence": "docs/plans/shared-extraction/evidence-20261012.md"
+      }
+    },
+    {
+      "id": "docs",
+      "kind": "documentation",
+      "command": "python tests/check_shared_docs.py",
+      "expectation": "Changed Markdown structure and local links valid.",
+      "result": {
+        "status": "passed",
+        "exit_code": 0,
+        "evidence": "docs/plans/shared-extraction/evidence-20261012.md"
+      }
+    },
+    {
+      "id": "lint",
+      "kind": "behavior",
+      "command": "ruff check report_generator create_test_data.py tests",
+      "expectation": "Package current lint rules pass without changing legacy code outside the rendering hooks.",
+      "result": {
+        "status": "passed",
+        "exit_code": 0,
+        "evidence": "docs/plans/shared-extraction/evidence-20261012.md"
+      }
+    }
+  ],
+  "documentation": "README describes additive v2 APIs; docs/plans/shared-extraction records API, legacy characterization and dated verification.",
+  "review": {
+    "status": "accepted",
+    "reviewer": "Fresh native agent integrated_review (read-only; ship verdict)",
+    "evidence": "docs/plans/shared-extraction/evidence-20261012.md",
+    "reconciliation": "Parent inspected complete task-owned runtime, added tests/fixtures, modified configuration/docs and removed duplicate implementations against Git baselines. Application static-analysis/runtime/test/lockfile pre-existing edits excluded. Exact SDK ownership rules retained; all recorded checks passed; test/documentation scope and executable docs command reconciled."
+  }
+}

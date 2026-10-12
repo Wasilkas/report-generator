@@ -103,5 +103,12 @@ class BaseReportBuilder(ABC):
             'Причины отсутствия сравнения приведены на листе исключений.'
         )
 
+    def _write_metrics(self, writer, sheet, frame, *, sheet_title):
+        """Render metrics through the shared writer; legacy layout stays unchanged."""
+        return writer.write(sheet, frame, sheet_title=sheet_title)
+
+    def _finish_metrics_sheet(self, sheet):
+        """Compatibility hook for explicitly requested structured presentation."""
+
     @abstractmethod
     def build(self, output_path: str | Path, *, overwrite: bool = False) -> None: ...

@@ -119,3 +119,41 @@ ID или служебными количествами/порогом confidenc
 лист, класс или ключ; для замены отчёта используйте явный флаг.
 
 Решения и проверка исправлений описаны в [реестре исправлений](docs/remediation-20261004.md).
+
+## Структурированный API v2
+
+Все прежние импорты, конструкторы, настройки, команды CLI и поведение `MetricsReader`
+сохраняются. Дополнительный API `report_generator.v2` принимает готовые таблицы:
+
+```python
+from report_generator.config import Config
+from report_generator.v2 import DevReportBuilder, PresentationOptions, read_metrics_table
+
+new = read_metrics_table("model_new.xlsx")
+prod = read_metrics_table("model_prod.xlsx")
+DevReportBuilder(
+    new,
+    prod,
+    Config.load(),
+    presentation=PresentationOptions(counts="below_table"),
+).build("report_dev.xlsx")
+```
+
+`MetricsTable(frame, source_name, source_path=None)` принимает `pandas.DataFrame`
+со столбцом `Класс`, копирует данные и проверяет уникальность классов и `ID`.
+`read_metrics_table` сохраняет текстовые классы точно, включая `0001`, `1`, `NA`
+и пробелы по краям; числовые ячейки строк порогов и строка `Среднее` удаляются.
+Эта политика действует только в v2. Режим `counts="columns"` сохраняет прежнее
+расположение coverage; `counts="below_table"` сразу пишет количества допустимых
+классов под таблицей. `count_title` и `count_labels` задают подписи. Арифметика,
+фильтрация по train и бизнес-вердикт используют общие расчёты с прежним API.
+
+`write_comparison_workbook(rows, excluded, methodology, path)` отдельно отображает
+уже рассчитанные статистические результаты и сохраняет CSV исключений и методологии.
+Он не вычисляет метрики, интервалы или значимость. Для универсальных баннеров и
+обратимых метаданных доступны `MetadataFormat`, `annotate_workbook`, `read_metadata`,
+`original_workbook` и `package_fingerprint`. Схему метаданных и её проверку задаёт
+вызывающее приложение; исходная книга восстанавливается байт в байт, а изменения
+аннотированной книги отвергаются по SHA-256.
+
+Контракты и порядок внедрения описаны в [плане извлечения](docs/plans/shared-extraction/plan.md).

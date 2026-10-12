@@ -94,17 +94,20 @@ class BusinessReportBuilder(BaseReportBuilder):
         ws_verdict = wb.create_sheet(self._config.sheet_names.verdict)
         ws_excl = wb.create_sheet(self._config.sheet_names.excluded)
 
-        self._sheet_writer.write(
+        self._write_metrics(
+            self._sheet_writer,
             ws1,
             df1_display,
             sheet_title=f'Метрики новой модели — {self.model1_reader.file_path.name}',
         )
-        self._sheet_writer.write(
+        self._write_metrics(
+            self._sheet_writer,
             ws2,
             df2_display,
             sheet_title=f'Метрики прод модели — {self.model2_reader.file_path.name}',
         )
-        last_row = self._diff_writer.write(
+        last_row = self._write_metrics(
+            self._diff_writer,
             ws3, df_diff_display, sheet_title='Сравнение (новая − прод)'
         )
         write_comparison_legend(ws3, last_row + 2, self._config, business=True)
@@ -112,6 +115,8 @@ class BusinessReportBuilder(BaseReportBuilder):
         write_excluded_sheet(ws_excl, excluded, self._config)
         for ws in (ws1, ws2, ws3, ws_verdict):
             ws.cell(ws.max_row + 2, 1, population_note)
+        for ws in (ws1, ws2, ws3):
+            self._finish_metrics_sheet(ws)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(output_path)
