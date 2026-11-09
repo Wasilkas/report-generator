@@ -210,7 +210,8 @@ def test_bottom_placement_keeps_coordinates_and_follows_drawings(tmp_path):
     assert main.cell(start, 1).hyperlink.target == links[0]
     assert main.cell(start + 1, 1).hyperlink.target == links[1]
     assert main.cell(start + 2, 1).hyperlink is None
-    assert main.print_area == f"'Main sheet'!$A$1:$E${start + 2}"
+    # The merged footer spans A:H, so the print area widens to keep it uncut.
+    assert main.print_area == f"'Main sheet'!$A$1:$H${start + 2}"
     # Excel footer codes start with &; a literal ampersand is stored doubled.
     assert main.oddFooter.left.text == 'Candidate: A&&B · Training source: recorded'
     # Sheets without drawings start one empty row after their last cell.
@@ -293,3 +294,29 @@ def test_invalid_placement_arguments_are_rejected(tmp_path, kwargs, error):
     with pytest.raises(ValueError, match=error):
         annotate_workbook(path, metadata_texts={}, format=FORMAT, **kwargs)
     assert path.read_bytes() == original
+
+
+def test_bottom_placement_extends_only_the_final_print_area_and_keeps_existing_links(tmp_path):
+    from openpyxl import Workbook
+
+    path = tmp_path / 'areas.xlsx'
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(['Class', 'Value'])
+    sheet.append(['cat', 1])
+    sheet['B2'].hyperlink = 'https://existing.example/'
+    sheet.oddHeader.center.text = 'Header'
+    sheet.print_area = ['A1:B1', 'A2:B2']
+    workbook.save(path)
+    _annotate_bottom(
+        path,
+        ['Model: m'],
+        banner_links=['https://app.example/models/m'],
+        page_footer='Model: m',
+    )
+    annotated = load_workbook(path).active
+    assert annotated.print_area == "'Sheet'!$A$1:$B$1,'Sheet'!$A$2:$H$4"
+    assert annotated['B2'].hyperlink.target == 'https://existing.example/'
+    assert annotated['A4'].hyperlink.target == 'https://app.example/models/m'
+    assert annotated.oddHeader.center.text == 'Header'
+    assert annotated.oddFooter.left.text == 'Model: m'

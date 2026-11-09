@@ -652,8 +652,8 @@ def _footer_sheet(
     links: Sequence[str | None],
     page_footer: str | None,
     style: int,
-) -> int:
-    """Append literal lines after all content; return the last footer row."""
+) -> tuple[int, str]:
+    """Append literal lines after all content; return the footer's last row and column."""
     data = root.find(f'{{{_S}}}sheetData')
     if data is None:
         raise ValueError('Generated worksheet is missing sheetData')
@@ -690,12 +690,16 @@ def _footer_sheet(
             odd_header = header_footer.find(f'{{{_S}}}oddHeader')
             header_footer.insert(0 if odd_header is None else 1, odd)
         odd.text = _footer_text(page_footer)
-    return start + len(lines) - 1 if lines else last
+    return (start + len(lines) - 1, end_column) if lines else (last, 'A')
+
+
+_AREA_END = re.compile(r':(?P<absolute>\$?)(?P<column>[A-Z]+)\$?(?P<row>\d+)$')
 
 
 def _extend_print_areas(
-    workbook: ET.Element, sheets: Sequence[str], last_rows: Sequence[int]
+    workbook: ET.Element, sheets: Sequence[str], footers: Sequence[tuple[int, str]]
 ) -> None:
+    """Grow only the final print area so the merged footer prints uncut."""
     defined = workbook.find(f'{{{_S}}}definedNames')
     if defined is None:
         return
@@ -705,15 +709,20 @@ def _extend_print_areas(
         index = int(element.get('localSheetId', '-1'))
         if not 0 <= index < len(sheets):
             continue
-        last = last_rows[index]
-
-        def extend(match: re.Match[str], last: int = last) -> str:
-            row = int(match.group('row'))
-            return f':{match.group("absolute")}{match.group("column")}${max(row, last)}'
-
-        element.text = re.sub(
-            r':(?P<absolute>\$?)(?P<column>[A-Z]+)\$?(?P<row>\d+)', extend, element.text
+        last_row, last_column = footers[index]
+        areas = element.text.split(',')
+        match = _AREA_END.search(areas[-1])
+        if match is None:
+            continue
+        column = get_column_letter(
+            max(
+                column_index_from_string(match.group('column')),
+                column_index_from_string(last_column),
+            )
         )
+        row = max(int(match.group('row')), last_row)
+        areas[-1] = areas[-1][: match.start()] + f':{match.group("absolute")}{column}${row}'
+        element.text = ','.join(areas)
 
 
 def annotate_workbook(
@@ -778,12 +787,12 @@ def annotate_workbook(
     shift = len(lines)
     if placement == 'bottom':
         style = _banner_style(entries) if lines else 0
-        last_rows = []
+        footers: list[tuple[int, str]] = []
         for target in sheets.values():
             root = _parse(entries[target])
-            last_rows.append(_footer_sheet(root, target, entries, lines, links, page_footer, style))
+            footers.append(_footer_sheet(root, target, entries, lines, links, page_footer, style))
             entries[target] = _xml(root)
-        _extend_print_areas(workbook, list(sheets), last_rows)
+        _extend_print_areas(workbook, list(sheets), footers)
         entries['xl/workbook.xml'] = _xml(workbook)
     else:
         style = _banner_style(entries)
