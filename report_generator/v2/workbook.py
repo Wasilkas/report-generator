@@ -13,7 +13,8 @@ import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -267,6 +268,18 @@ def _print_width(root: ET.Element) -> None:
     setup.set('fitToWidth', '1')
 
 
+def _banner_row(index: int, line: str, style: int, width: float) -> ET.Element:
+    characters = sum(2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1 for char in line)
+    height = max(30, 16 * math.ceil(characters / max(1, width - 2)))
+    row = ET.Element(f'{{{_S}}}row', {'r': str(index), 'ht': str(height), 'customHeight': '1'})
+    cell = ET.SubElement(row, f'{{{_S}}}c', {'r': f'A{index}', 't': 'inlineStr', 's': str(style)})
+    inline = ET.SubElement(cell, f'{{{_S}}}is')
+    ET.SubElement(
+        inline, f'{{{_S}}}t', {'{http://www.w3.org/XML/1998/namespace}space': 'preserve'}
+    ).text = line
+    return row
+
+
 def _sheet(root: ET.Element, name: str, names: set[str], lines: list[str], style: int) -> None:
     shift = len(lines)
     data = root.find(f'{{{_S}}}sheetData')
@@ -308,19 +321,7 @@ def _sheet(root: ET.Element, name: str, names: set[str], lines: list[str], style
         root.insert(insertion, merges)
     width = _banner_width(root, end_column)
     for index, line in enumerate(lines, start=1):
-        characters = sum(
-            2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1 for char in line
-        )
-        height = max(30, 16 * math.ceil(characters / max(1, width - 2)))
-        row = ET.Element(f'{{{_S}}}row', {'r': str(index), 'ht': str(height), 'customHeight': '1'})
-        cell = ET.SubElement(
-            row, f'{{{_S}}}c', {'r': f'A{index}', 't': 'inlineStr', 's': str(style)}
-        )
-        inline = ET.SubElement(cell, f'{{{_S}}}is')
-        ET.SubElement(
-            inline, f'{{{_S}}}t', {'{http://www.w3.org/XML/1998/namespace}space': 'preserve'}
-        ).text = line
-        data.insert(index - 1, row)
+        data.insert(index - 1, _banner_row(index, line, style, width))
         if end_column != 'A':
             ET.SubElement(merges, f'{{{_S}}}mergeCell', {'ref': f'A{index}:{end_column}{index}'})
     merges.set('count', str(len(merges)))
@@ -456,6 +457,265 @@ def _add_metadata(
     entries[format.path] = _xml(metadata)
 
 
+_XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+_HYPERLINK = _R + '/hyperlink'
+_EMU_PER_POINT = 12700
+_FOOTER_LIMIT = 255
+# CT_Worksheet child order; new elements are inserted after their predecessors.
+_WORKSHEET_ORDER = (
+    'sheetPr',
+    'dimension',
+    'sheetViews',
+    'sheetFormatPr',
+    'cols',
+    'sheetData',
+    'sheetCalcPr',
+    'sheetProtection',
+    'protectedRanges',
+    'scenarios',
+    'autoFilter',
+    'sortState',
+    'dataConsolidate',
+    'customSheetViews',
+    'mergeCells',
+    'phoneticPr',
+    'conditionalFormatting',
+    'dataValidations',
+    'hyperlinks',
+    'printOptions',
+    'pageMargins',
+    'pageSetup',
+    'headerFooter',
+    'rowBreaks',
+    'colBreaks',
+    'customProperties',
+    'cellWatches',
+    'ignoredErrors',
+    'smartTags',
+    'drawing',
+    'legacyDrawing',
+    'legacyDrawingHF',
+    'drawingHF',
+    'picture',
+    'oleObjects',
+    'controls',
+    'webPublishItems',
+    'tableParts',
+    'extLst',
+)
+
+
+def _child(root: ET.Element, tag: str) -> ET.Element:
+    """Return a worksheet child, creating it at its schema position."""
+    existing = root.find(f'{{{_S}}}{tag}')
+    if existing is not None:
+        return existing
+    before = set(_WORKSHEET_ORDER[: _WORKSHEET_ORDER.index(tag)])
+    insertion = max(
+        (
+            index + 1
+            for index, element in enumerate(root)
+            if element.tag.rsplit('}', 1)[-1] in before
+        ),
+        default=0,
+    )
+    element = ET.Element(f'{{{_S}}}{tag}')
+    root.insert(insertion, element)
+    return element
+
+
+def _part_rels_path(part: str) -> str:
+    directory, _, name = part.rpartition('/')
+    return f'{directory}/_rels/{name}.rels'
+
+
+def _resolve_target(source: str, target: str) -> str:
+    if target.startswith('/'):
+        return target.lstrip('/')
+    parts = source.rpartition('/')[0].split('/')
+    for segment in target.split('/'):
+        if segment == '..':
+            parts.pop()
+        elif segment not in ('', '.'):
+            parts.append(segment)
+    return '/'.join(parts)
+
+
+def _anchor_end_row(anchor: ET.Element, default_height_points: float) -> int:
+    """Return the last 1-based row covered by one drawing anchor."""
+    tag = anchor.tag.rsplit('}', 1)[-1]
+    if tag == 'twoCellAnchor':
+        return int(anchor.findtext(f'{{{_XDR}}}to/{{{_XDR}}}row', '0')) + 1
+    row_height = max(1.0, default_height_points) * _EMU_PER_POINT
+    extent = anchor.find(f'{{{_XDR}}}ext')
+    height = int(extent.get('cy', '0')) if extent is not None else 0
+    if tag == 'oneCellAnchor':
+        start = int(anchor.findtext(f'{{{_XDR}}}from/{{{_XDR}}}row', '0'))
+        offset = int(anchor.findtext(f'{{{_XDR}}}from/{{{_XDR}}}rowOff', '0'))
+        return start + math.ceil((offset + height) / row_height)
+    position = anchor.find(f'{{{_XDR}}}pos')
+    top = int(position.get('y', '0')) if position is not None else 0
+    return math.ceil((top + height) / row_height)
+
+
+def _last_used_row(root: ET.Element, target: str, entries: Mapping[str, bytes]) -> int:
+    """Last row holding cells, merged ranges or drawings, so a footer covers nothing."""
+    last = 0
+    data = root.find(f'{{{_S}}}sheetData')
+    for row in data if data is not None else ():
+        if len(row):
+            last = max(last, int(row.get('r', '0')))
+    merges = root.find(f'{{{_S}}}mergeCells')
+    for merge in merges if merges is not None else ():
+        match = _COORD.fullmatch(merge.get('ref', '').split(':')[-1])
+        if match is not None:
+            last = max(last, int(match.group('row').lstrip('$')))
+    drawing = root.find(f'{{{_S}}}drawing')
+    rels_path = _part_rels_path(target)
+    if drawing is None or rels_path not in entries:
+        return last
+    relationship = drawing.get(f'{{{_R}}}id')
+    format_properties = root.find(f'{{{_S}}}sheetFormatPr')
+    default_height = float(
+        format_properties.get('defaultRowHeight', '15') if format_properties is not None else '15'
+    )
+    for element in _parse(entries[rels_path]):
+        if element.get('Id') != relationship:
+            continue
+        part = _resolve_target(target, element.attrib['Target'])
+        if part in entries:
+            for anchor in _parse(entries[part]):
+                last = max(last, _anchor_end_row(anchor, default_height))
+    return last
+
+
+def _validated_links(lines: Sequence[str], links: Sequence[str | None] | None) -> list[str | None]:
+    if links is None:
+        return [None] * len(lines)
+    if len(links) != len(lines):
+        raise ValueError('Banner links must match banner lines one to one')
+    for link in links:
+        if link is None:
+            continue
+        parts = urlsplit(link) if isinstance(link, str) else None
+        if parts is None or parts.scheme not in ('http', 'https') or not parts.netloc:
+            raise ValueError('Banner links must be absolute http or https URLs')
+    return list(links)
+
+
+def _footer_text(text: str) -> str:
+    """Escape page-footer codes and keep Excel's 255-character limit."""
+    prefix = '&L'
+    escaped = text.replace('&', '&&')
+    if len(prefix) + len(escaped) <= _FOOTER_LIMIT:
+        return prefix + escaped
+    kept = escaped[: _FOOTER_LIMIT - len(prefix) - 1]
+    if (len(kept) - len(kept.rstrip('&'))) % 2:
+        kept = kept[:-1]
+    return prefix + kept + '…'
+
+
+def _add_hyperlinks(
+    root: ET.Element,
+    target: str,
+    entries: dict[str, bytes],
+    cells: Sequence[tuple[str, str]],
+) -> None:
+    rels_path = _part_rels_path(target)
+    rels = (
+        _parse(entries[rels_path]) if rels_path in entries else ET.Element(f'{{{_P}}}Relationships')
+    )
+    used = {element.get('Id') for element in rels}
+    hyperlinks = _child(root, 'hyperlinks')
+    counter = 1
+    for reference, url in cells:
+        while f'rIdLink{counter}' in used:
+            counter += 1
+        identifier = f'rIdLink{counter}'
+        used.add(identifier)
+        ET.SubElement(
+            rels,
+            f'{{{_P}}}Relationship',
+            {'Id': identifier, 'Type': _HYPERLINK, 'Target': url, 'TargetMode': 'External'},
+        )
+        ET.SubElement(
+            hyperlinks, f'{{{_S}}}hyperlink', {'ref': reference, f'{{{_R}}}id': identifier}
+        )
+    entries[rels_path] = _xml(rels)
+
+
+def _footer_sheet(
+    root: ET.Element,
+    target: str,
+    entries: dict[str, bytes],
+    lines: Sequence[str],
+    links: Sequence[str | None],
+    page_footer: str | None,
+    style: int,
+) -> int:
+    """Append literal lines after all content; return the last footer row."""
+    data = root.find(f'{{{_S}}}sheetData')
+    if data is None:
+        raise ValueError('Generated worksheet is missing sheetData')
+    dimension = root.find(f'{{{_S}}}dimension')
+    end_column = 'D'
+    if dimension is not None:
+        match = _COORD.fullmatch(dimension.get('ref', 'A1').split(':')[-1])
+        if match is not None:
+            end_column = match.group('col') or 'D'
+    end_column = get_column_letter(max(8, column_index_from_string(end_column)))
+    last = _last_used_row(root, target, entries)
+    start = last + 2
+    if lines:
+        merges = _child(root, 'mergeCells')
+        width = _banner_width(root, end_column)
+        linked: list[tuple[str, str]] = []
+        for offset, (line, link) in enumerate(zip(lines, links, strict=True)):
+            index = start + offset
+            data.append(_banner_row(index, line, style, width))
+            ET.SubElement(merges, f'{{{_S}}}mergeCell', {'ref': f'A{index}:{end_column}{index}'})
+            if link is not None:
+                linked.append((f'A{index}', link))
+        merges.set('count', str(len(merges)))
+        if linked:
+            _add_hyperlinks(root, target, entries, linked)
+        if dimension is not None:
+            dimension.set('ref', f'A1:{end_column}{start + len(lines) - 1}')
+    if page_footer is not None:
+        header_footer = _child(root, 'headerFooter')
+        odd = header_footer.find(f'{{{_S}}}oddFooter')
+        if odd is None:
+            # oddHeader precedes oddFooter in CT_HeaderFooter.
+            odd = ET.Element(f'{{{_S}}}oddFooter')
+            odd_header = header_footer.find(f'{{{_S}}}oddHeader')
+            header_footer.insert(0 if odd_header is None else 1, odd)
+        odd.text = _footer_text(page_footer)
+    return start + len(lines) - 1 if lines else last
+
+
+def _extend_print_areas(
+    workbook: ET.Element, sheets: Sequence[str], last_rows: Sequence[int]
+) -> None:
+    defined = workbook.find(f'{{{_S}}}definedNames')
+    if defined is None:
+        return
+    for element in defined:
+        if element.get('name') != '_xlnm.Print_Area' or not element.text:
+            continue
+        index = int(element.get('localSheetId', '-1'))
+        if not 0 <= index < len(sheets):
+            continue
+        last = last_rows[index]
+
+        def extend(match: re.Match[str], last: int = last) -> str:
+            row = int(match.group('row'))
+            return f':{match.group("absolute")}{match.group("column")}${max(row, last)}'
+
+        element.text = re.sub(
+            r':(?P<absolute>\$?)(?P<column>[A-Z]+)\$?(?P<row>\d+)', extend, element.text
+        )
+
+
 def annotate_workbook(
     path: str | Path,
     *,
@@ -463,15 +723,34 @@ def annotate_workbook(
     metadata_texts: Mapping[str, str],
     format: MetadataFormat,
     validate: MetadataValidator | None = None,
+    placement: Literal['top', 'bottom'] = 'top',
+    banner_links: Sequence[str | None] | None = None,
+    page_footer: str | None = None,
 ) -> None:
     """Prepend literal banners while preserving OOXML coordinates and original bytes.
 
     The caller chooses banner text and metadata schema. The embedded original,
     part names, XML envelope and fingerprint algorithm remain caller-defined.
     Reannotation starts from authenticated original bytes, making it idempotent.
+
+    ``placement='bottom'`` leaves every original coordinate unchanged: lines start
+    one empty row after the last cell, merged range or drawing of each worksheet,
+    optional ``banner_links`` become external hyperlinks on their lines and
+    ``page_footer`` becomes the printed left footer. Bottom placement accepts no
+    lines for a metadata-only envelope and never adds print titles.
     """
-    if not banner_lines or any(not isinstance(line, str) for line in banner_lines):
+    if placement not in ('top', 'bottom'):
+        raise ValueError("Banner placement must be 'top' or 'bottom'")
+    if any(not isinstance(line, str) for line in banner_lines):
         raise ValueError('Workbook annotation requires literal banner lines')
+    if placement == 'top':
+        if not banner_lines:
+            raise ValueError('Workbook annotation requires literal banner lines')
+        if banner_links is not None or page_footer is not None:
+            raise ValueError('Banner links and page footers require bottom placement')
+    if page_footer is not None and not isinstance(page_footer, str):
+        raise ValueError('Page footer must be text')
+    links = _validated_links(banner_lines, banner_links)
     if 'original' in metadata_texts:
         raise ValueError('Original workbook metadata is owned by the package writer')
     if any(
@@ -497,14 +776,24 @@ def annotate_workbook(
             sheets[element.attrib['name']] = resolved
     lines = list(banner_lines)
     shift = len(lines)
-    style = _banner_style(entries)
-    for name, target in sheets.items():
-        root = _parse(entries[target])
-        _sheet(root, name, set(sheets), lines, style)
-        entries[target] = _xml(root)
-    _defined_names(workbook, sheets_element, sheets, shift)
-    entries['xl/workbook.xml'] = _xml(workbook)
-    _shift_related_parts(entries, sheets, shift)
+    if placement == 'bottom':
+        style = _banner_style(entries) if lines else 0
+        last_rows = []
+        for target in sheets.values():
+            root = _parse(entries[target])
+            last_rows.append(_footer_sheet(root, target, entries, lines, links, page_footer, style))
+            entries[target] = _xml(root)
+        _extend_print_areas(workbook, list(sheets), last_rows)
+        entries['xl/workbook.xml'] = _xml(workbook)
+    else:
+        style = _banner_style(entries)
+        for name, target in sheets.items():
+            root = _parse(entries[target])
+            _sheet(root, name, set(sheets), lines, style)
+            entries[target] = _xml(root)
+        _defined_names(workbook, sheets_element, sheets, shift)
+        entries['xl/workbook.xml'] = _xml(workbook)
+        _shift_related_parts(entries, sheets, shift)
     _add_metadata(entries, metadata_texts, original, format)
     output = io.BytesIO()
     with ZipFile(output, 'w', compression=ZIP_DEFLATED) as archive:

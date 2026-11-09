@@ -17,7 +17,7 @@ from report_generator.v2 import (
     package_fingerprint,
     read_metadata,
 )
-from report_generator.v2.workbook import _parse
+from report_generator.v2.workbook import _parse, _xml
 
 FORMAT = MetadataFormat(
     'customXml/clearml-yolo-identity.xml',
@@ -164,3 +164,132 @@ def test_nonapplication_metadata_envelope_and_literal_banner(tmp_path):
         assert sheet['A1'].value == '=literal' and sheet['A1'].data_type == 's'
         assert sheet['A2'].value == '  Unicode 模型  '
     workbook.close()
+
+
+def _annotate_bottom(path, lines, **kwargs):
+    annotate_workbook(
+        path,
+        banner_lines=lines,
+        metadata_texts={'models': '{}'},
+        format=FORMAT,
+        placement='bottom',
+        **kwargs,
+    )
+
+
+def _sheet_parts(path):
+    with ZipFile(path) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
+
+
+def test_bottom_placement_keeps_coordinates_and_follows_drawings(tmp_path):
+    original, _, _ = characterized()
+    path = tmp_path / 'book.xlsx'
+    path.write_bytes(original)
+    lines = ['Candidate: =model 模型', 'Training task: open in ClearML', 'plain']
+    links = ['https://app.example/projects/*/models/m1', 'https://app.example/t/1', None]
+    _annotate_bottom(
+        path, lines, banner_links=links, page_footer='Candidate: A&B · Training source: recorded'
+    )
+    workbook = load_workbook(path)
+    main, other = workbook['Main sheet'], workbook['Other']
+    # Original coordinates, formulas and dependent ranges are unchanged.
+    assert main['A1'].value == 'Class' and main['B3'].value == '=SUM($B$2:B2)'
+    assert other['A1'].value == "='Main sheet'!$B$2+1"
+    assert main.tables['Results'].ref == 'A1:B2'
+    assert main.auto_filter.ref == 'A1:B2'
+    assert main.data_validations.dataValidation[0].formula1 == 'B2'
+    assert main.freeze_panes == 'B2'
+    assert main.print_title_rows == '$1:$1'
+    assert other.print_title_rows == '$1:$2'
+    # The chart starts at row 2 and spans ~2700000 EMU (15 rows of 15pt); the footer follows it.
+    start = 2 + 15 + 1
+    assert main.cell(start - 1, 1).value is None
+    assert [main.cell(start + offset, 1).value for offset in range(3)] == lines
+    assert all(main.cell(start + offset, 1).data_type == 's' for offset in range(3))
+    assert main.cell(start, 1).hyperlink.target == links[0]
+    assert main.cell(start + 1, 1).hyperlink.target == links[1]
+    assert main.cell(start + 2, 1).hyperlink is None
+    assert main.print_area == f"'Main sheet'!$A$1:$E${start + 2}"
+    # Excel footer codes start with &; a literal ampersand is stored doubled.
+    assert main.oddFooter.left.text == 'Candidate: A&&B · Training source: recorded'
+    # Sheets without drawings start one empty row after their last cell.
+    source = load_workbook(io.BytesIO(original))
+    other_last = source['Other'].max_row
+    source.close()
+    assert other.cell(other_last + 1, 1).value is None
+    assert other.cell(other_last + 2, 1).value == lines[0]
+    workbook.close()
+    assert original_workbook(path.read_bytes(), FORMAT) == original
+    first = _sheet_parts(path)
+    _annotate_bottom(
+        path, lines, banner_links=links, page_footer='Candidate: A&B · Training source: recorded'
+    )
+    assert _sheet_parts(path) == first
+
+
+def test_bottom_placement_without_lines_is_metadata_only(tmp_path):
+    original, _, _ = characterized()
+    path = tmp_path / 'book.xlsx'
+    path.write_bytes(original)
+    _annotate_bottom(path, [])
+    with ZipFile(io.BytesIO(original)) as archive:
+        sheet = archive.read('xl/worksheets/sheet1.xml')
+    assert _sheet_parts(path)['xl/worksheets/sheet1.xml'] == _xml(_parse(sheet))
+    assert read_metadata(path.read_bytes(), FORMAT) is not None
+    assert original_workbook(path.read_bytes(), FORMAT) == original
+
+
+def test_bottom_placement_on_empty_sheet_starts_at_second_row(tmp_path):
+    from openpyxl import Workbook
+
+    path = tmp_path / 'empty.xlsx'
+    Workbook().save(path)
+    _annotate_bottom(path, ['Model: name'])
+    workbook = load_workbook(path)
+    assert workbook.active['A1'].value is None
+    assert workbook.active['A2'].value == 'Model: name'
+    workbook.close()
+
+
+def test_page_footer_escapes_codes_and_truncates_to_excel_limit(tmp_path):
+    original, _, _ = characterized()
+    path = tmp_path / 'book.xlsx'
+    path.write_bytes(original)
+    text = 'Role: ' + '&' * 300
+    _annotate_bottom(path, ['line'], page_footer=text)
+    sheet = _parse(_sheet_parts(path)['xl/worksheets/sheet1.xml'])
+    footer = sheet.find(
+        '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}headerFooter/'
+        '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}oddFooter'
+    ).text
+    assert len(footer) <= 255
+    assert footer.startswith('&LRole: ') and footer.endswith('…')
+    assert (len(footer[len('&LRole: ') : -1])) % 2 == 0
+
+
+@pytest.mark.parametrize(
+    'kwargs,error',
+    [
+        ({'placement': 'top', 'banner_lines': ['x'], 'page_footer': 'f'}, 'bottom placement'),
+        ({'placement': 'top', 'banner_lines': ['x'], 'banner_links': [None]}, 'bottom placement'),
+        ({'placement': 'top', 'banner_lines': []}, 'literal banner lines'),
+        ({'placement': 'side', 'banner_lines': ['x']}, 'placement'),
+        ({'placement': 'bottom', 'banner_lines': ['x'], 'banner_links': []}, 'one to one'),
+        (
+            {'placement': 'bottom', 'banner_lines': ['x'], 'banner_links': ['javascript:alert(1)']},
+            'http',
+        ),
+        (
+            {'placement': 'bottom', 'banner_lines': ['x'], 'banner_links': ['file:///etc/passwd']},
+            'http',
+        ),
+    ],
+)
+def test_invalid_placement_arguments_are_rejected(tmp_path, kwargs, error):
+    original, _, _ = characterized()
+    path = tmp_path / 'book.xlsx'
+    path.write_bytes(original)
+    with pytest.raises(ValueError, match=error):
+        annotate_workbook(path, metadata_texts={}, format=FORMAT, **kwargs)
+    assert path.read_bytes() == original

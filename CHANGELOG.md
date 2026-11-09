@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `annotate_workbook(placement="bottom")` appends caller banners one empty row after each
+  worksheet's last cell, merged range or drawing without moving original coordinates, with
+  optional per-line http(s) `banner_links` and a printed `page_footer`. The default
+  prepend placement is unchanged.
+
 ## [0.1.2] - 2026-10-05
 
 ### Fixed
