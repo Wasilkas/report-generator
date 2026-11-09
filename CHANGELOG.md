@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-09
+
 ### Added
 
+- `report_generator.v2`: structured `DevReportBuilder`/`BusinessReportBuilder` with
+  `PresentationOptions`, `MetricsTable` input, `write_comparison_workbook`,
+  `compact_report_counts` and reversible workbook annotation (`annotate_workbook`,
+  `original_workbook`, `read_metadata`, `package_fingerprint`). Legacy module interfaces
+  are unchanged.
 - `annotate_workbook(placement="bottom")` appends caller banners one empty row after each
   worksheet's last cell, merged range or drawing without moving original coordinates, with
   optional per-line http(s) `banner_links` and a printed `page_footer`. The default
