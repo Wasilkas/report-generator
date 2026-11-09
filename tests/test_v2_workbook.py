@@ -320,3 +320,15 @@ def test_bottom_placement_extends_only_the_final_print_area_and_keeps_existing_l
     assert annotated['A4'].hyperlink.target == 'https://app.example/models/m'
     assert annotated.oddHeader.center.text == 'Header'
     assert annotated.oddFooter.left.text == 'Model: m'
+
+
+def test_bottom_placement_fits_printed_width_to_one_page(tmp_path):
+    original, _, _ = characterized()
+    path = tmp_path / 'book.xlsx'
+    path.write_bytes(original)
+    _annotate_bottom(path, ['Model: m'], page_footer='Model: m')
+    workbook = load_workbook(path)
+    for sheet in workbook:
+        assert sheet.sheet_properties.pageSetUpPr.fitToPage is True
+        assert sheet.page_setup.fitToWidth == 1
+    workbook.close()

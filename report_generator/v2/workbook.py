@@ -665,6 +665,9 @@ def _footer_sheet(
             end_column = match.group('col') or 'D'
     end_column = get_column_letter(max(8, column_index_from_string(end_column)))
     last = _last_used_row(root, target, entries)
+    if lines or page_footer is not None:
+        # Printed identity stays readable: fit the merged footer width to one page.
+        _print_width(root)
     start = last + 2
     if lines:
         merges = _child(root, 'mergeCells')
