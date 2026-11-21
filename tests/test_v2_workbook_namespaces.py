@@ -255,3 +255,38 @@ def test_named_prefix_bound_to_two_uris_in_one_part_is_rejected(tmp_path):
     with pytest.raises(ValueError, match='prefix'):
         annotate(path, 'bottom')
     assert path.read_bytes() == original
+
+
+def test_conflicting_prefix_in_a_part_that_is_only_read_does_not_block_annotation(tmp_path):
+    from openpyxl.chart import BarChart, Reference
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(['Class', 'Value'])
+    sheet.append(['cat', 1])
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=2), titles_from_data=True)
+    sheet.add_chart(chart, 'D2')
+    output = io.BytesIO()
+    workbook.save(output)
+    with ZipFile(output) as archive:
+        parts = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+    # Bottom placement reads the drawing to find the last used row and never rewrites it.
+    drawing = 'xl/drawings/drawing1.xml'
+    content, count = re.subn(
+        rb'<((?:\w+:)?wsDr)\b',
+        rb'<\1 xmlns:mc="' + MC.encode() + rb'" mc:Ignorable="xr" xmlns:xr="urn:example:one"',
+        parts[drawing],
+        count=1,
+    )
+    assert count == 1
+    nested = '<mc:AlternateContent xmlns:xr="urn:example:two" mc:Ignorable="xr"/>'.encode()
+    content, count = re.subn(rb'(</(?:\w+:)?wsDr>)\s*$', nested + rb'\1', content)
+    assert count == 1
+    parts[drawing] = content
+    path = tmp_path / 'drawing.xlsx'
+    original = package(parts)
+    path.write_bytes(original)
+    annotate(path, 'bottom')
+    assert annotated_parts(path)[drawing] == content
+    assert original_workbook(path.read_bytes(), FORMAT) == original
