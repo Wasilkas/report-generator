@@ -29,6 +29,14 @@
   is unchanged.
 - The `translations` argument of `compact_report_counts`, which only business reports used.
 
+### Fixed
+
+- `annotate_workbook` keeps workbooks saved by Excel openable: a rewritten part keeps the
+  declaration of every namespace prefix that its markup-compatibility attributes name
+  (`mc:Ignorable`, `mc:ProcessContent`, `mc:MustUnderstand`, `mc:PreserveElements`,
+  `mc:PreserveAttributes` and `Requires` on `mc:Choice`). Workbooks written by openpyxl are
+  annotated byte for byte as before.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added
