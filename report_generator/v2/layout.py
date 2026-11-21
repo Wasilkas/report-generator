@@ -1,7 +1,6 @@
 """Present aggregate availability below newly generated report metric tables."""
 
 import re
-from collections.abc import Mapping
 from copy import copy
 from pathlib import Path
 from typing import Any
@@ -14,30 +13,26 @@ _COVERAGE_SUFFIX = ' coverage'
 _METRIC_LABELS = {'ap50': 'AP50', 'ap75': 'AP75', 'ap50_95': 'AP50-95'}
 
 
-def compact_report_counts(
-    path: Path,
-    sheet_names: tuple[str, ...],
-    *,
-    translations: Mapping[str, str] | None = None,
-) -> None:
+def compact_report_counts(path: Path, sheet_names: tuple[str, ...]) -> None:
     """Move upstream mean-row counts without recalculating their populations.
 
-    Call only on fresh report-generator outputs, before identity annotation.
+    Call only on fresh developer report outputs, before identity annotation.
     Their metric headers occupy row 2 and generated coverage columns are trailing.
+    The business report shows no availability counts and needs no compaction.
     """
     workbook = load_workbook(path)
     try:
         for sheet in workbook:
             if sheet.title in sheet_names:
-                _compact_sheet(sheet, translations or {})
+                _compact_sheet(sheet)
         workbook.save(path)
     finally:
         workbook.close()
 
 
-def _compact_sheet(sheet: Any, translations: Mapping[str, str]) -> None:
+def _compact_sheet(sheet: Any) -> None:
     """Keep the untyped openpyxl worksheet API inside the rendering boundary."""
-    columns = _summary_columns(sheet, translations)
+    columns = _summary_columns(sheet)
     if not columns:
         return
     # Column deletion does not rewrite formulas or shift column dimensions.
@@ -67,20 +62,10 @@ def _compact_sheet(sheet: Any, translations: Mapping[str, str]) -> None:
     sheet.column_dimensions['A'].width = max(sheet.column_dimensions['A'].width, 36)
 
 
-def _summary_columns(sheet: Any, translations: Mapping[str, str]) -> list[tuple[int, str, str]]:
+def _summary_columns(sheet: Any) -> list[tuple[int, str, str]]:
     mean_rows = [cell.row for cell in sheet['A'] if cell.value == 'Среднее']
     if len(mean_rows) != 1:
         raise ValueError(f'Report {sheet.title!r} must have exactly one mean row')
-    headers = {str(cell.value) for cell in sheet[2]}
-    source_headers = {
-        display: source
-        for source, display in translations.items()
-        if source.endswith(_COVERAGE_SUFFIX)
-        and translations.get(
-            source.removesuffix(_COVERAGE_SUFFIX), source.removesuffix(_COVERAGE_SUFFIX)
-        )
-        in headers
-    }
     columns: list[tuple[int, str, str]] = []
     for cell in sheet[2]:
         # Only generated aggregate cells contain valid/eligible strings. Ordinary
@@ -88,7 +73,7 @@ def _summary_columns(sheet: Any, translations: Mapping[str, str]) -> list[tuple[
         value = sheet.cell(mean_rows[0], cell.column).value
         if not isinstance(value, str) or re.fullmatch(r'\d+/\d+', value) is None:
             continue
-        header = source_headers.get(str(cell.value), str(cell.value))
+        header = str(cell.value)
         if not header.endswith(_COVERAGE_SUFFIX):
             raise ValueError(f'Report {sheet.title!r} has an unknown class-count header {header!r}')
         metric = header.removesuffix(_COVERAGE_SUFFIX)

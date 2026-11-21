@@ -78,7 +78,8 @@ def characterize(tmp_path):
             path = tmp_path / (role + '.xlsx')
             frame.to_excel(path, index=False)
             sources.append(path)
-        for builder in [DevReportBuilder, BusinessReportBuilder]:
+        # The business workbook has its own golden; only the developer one is frozen here.
+        for builder in [DevReportBuilder]:
             target = tmp_path / 'report.xlsx'
             builder(*(MetricsReader(p) for p in sources), Config.load()).build(
                 target, overwrite=True

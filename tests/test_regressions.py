@@ -335,6 +335,10 @@ def test_saved_workbook_unavailable_and_legends(tmp_path, config, mode):
         assert wb[config.sheet_names.verdict]['E6'].value == 'Недостаточно данных'
         assert any('5.0 п.п.' in str(c.value) for row in ws for c in row)
     first = wb[config.sheet_names.model1]
+    if mode == 'business':
+        # AP and availability are not business columns.
+        assert not any('ap50' in str(c.value) for c in first[2])
+        return
     ap = next(c.column for c in first[2] if c.value == 'ap50')
     assert first.cell(3, ap).value == 'NA'
     coverage = next(c.column for c in first[2] if c.value == 'ap50 coverage')

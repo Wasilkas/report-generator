@@ -2,6 +2,7 @@
 
 import math
 import warnings
+from collections.abc import Iterable
 
 import pandas as pd
 from openpyxl.styles import Font, PatternFill
@@ -20,7 +21,48 @@ from ...core.writer import (
     _fill,
 )
 
+# Example counts by split, in display order; both spellings are accepted as input.
+SPLIT_COUNT_COLS = tuple(
+    f'{name} {split}'
+    for split in ('test', 'train', 'val')
+    for name in ('Количество примеров', 'Число примеров')
+)
+# The unsplit count stands in when no input has a split count.
+COUNT_COL = 'Количество примеров'
+
 # ── Data preparation ──────────────────────────────────────────────────────────
+
+
+def fixed_columns(biz: BusinessConfig, available: Iterable[str]) -> list[str]:
+    """Return the business columns, in display order, that an input supplies.
+
+    The list is fixed: no other input column is shown. A goal column is kept
+    only with the source column it is derived from.
+    """
+    available = set(available)
+    goal_source = {
+        biz.col_perebrak_target: biz.perebrak_col,
+        biz.col_nedobrak_target: biz.nedobrak_col,
+        biz.col_perebrak_gross: biz.perebrak_col,
+        biz.col_nedobrak_gross: biz.nedobrak_col,
+    }
+    split_counts = [column for column in SPLIT_COUNT_COLS if column in available]
+    listed = [
+        'tp',
+        'fp',
+        'fn',
+        'confidence',
+        'precision',
+        'recall',
+        biz.f1_col,
+        biz.perebrak_col,
+        biz.nedobrak_col,
+        *biz.goal_cols,
+        *(split_counts or [COUNT_COL]),
+    ]
+    # A configured source may reuse a listed name; each column appears once.
+    kept = [column for column in listed if goal_source.get(column, column) in available]
+    return [CLASS_COL, *dict.fromkeys(kept)]
 
 
 def add_goal_columns(df: pd.DataFrame, biz: BusinessConfig) -> pd.DataFrame:
@@ -67,6 +109,43 @@ def add_goal_columns(df: pd.DataFrame, biz: BusinessConfig) -> pd.DataFrame:
     return df[cols]
 
 
+def _finite(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors='coerce')
+    return numeric.replace([math.inf, -math.inf], float('nan'))
+
+
+def column_differences(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
+    """Return new − prod per class for every column of two same-column frames.
+
+    Classes are the sorted union; a missing or non-finite operand leaves the
+    difference unavailable.
+    """
+    idx1 = df1.set_index(CLASS_COL)
+    idx2 = df2.set_index(CLASS_COL)
+    classes = idx1.index.union(idx2.index, sort=True)
+    result = pd.DataFrame(index=classes)
+    for col in idx1.columns:
+        difference = _finite(idx1[col].reindex(classes)) - _finite(idx2[col].reindex(classes))
+        result[col] = _finite(difference)
+    return result.reset_index()
+
+
+def sum_counts(table: pd.DataFrame, population: pd.DataFrame) -> pd.DataFrame:
+    """Replace the aggregate of every example-count column with the population sum.
+
+    *table* ends with the aggregate row; *population* holds the rows it covers.
+    A count with no finite value stays unavailable.
+    """
+    table = table.copy()
+    for col in table.columns:
+        if col != COUNT_COL and col not in SPLIT_COUNT_COLS:
+            continue
+        finite = _finite(population[col]).dropna()
+        table[col] = table[col].astype(object)
+        table.iloc[-1, table.columns.get_loc(col)] = float(finite.sum()) if len(finite) else None
+    return table
+
+
 def to_percentage(df: pd.DataFrame, biz: BusinessConfig) -> pd.DataFrame:
     """Multiply perebrak and nedobrak columns by 100 (copy)."""
     df = df.copy()
@@ -104,7 +183,7 @@ def build_format_map(config: Config) -> dict[str, str]:
         fmt[trans.get(src, src)] = '0.00'
 
     # Integer columns (use translated names)
-    for col in config.int_cols:
+    for col in config.int_cols | {COUNT_COL}:
         fmt[trans.get(col, col)] = '0'
 
     # Goal columns — 2 dp so mean row (fraction) displays nicely

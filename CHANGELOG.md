@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The business report has one fixed-column layout, written by `generate-report business`,
+  the legacy `BusinessReportBuilder` and `v2.BusinessReportBuilder`. The metric sheets show
+  only `Класс`, `tp`, `fp`, `fn`, `Порог`, `precision`, `recall`, `f1_score`,
+  `Перебраковка, %`, `Недобраковка, %`, the four goal columns and the example counts by
+  split, in that order. A listed column that neither input supplies is omitted, and the
+  unsplit `Количество примеров` column stands in when no input has a split count.
+  `business.column_translations` still renames the headers that remain.
+- In the business `Среднее` row, columns in `excluded_from_mean` are `NA`, example-count
+  columns show the sum over the model's own eligible classes, and the other columns keep
+  their mean.
+- The business `Сравнение` sheet shows new − prod for every column, including `tp`, `fp`,
+  `fn`, `Порог`, the goal columns and the example counts. Its `Среднее` row aggregates the
+  differences over shared classes. Only the quality and percentage columns are coloured.
+  The legend is four text lines in column A.
+- The business population note is five rows in column A on the model, comparison and
+  verdict sheets.
+- `v2.BusinessReportBuilder(model1, model2, config)` no longer takes `presentation`.
+
+### Removed
+
+- The previous business layout: every input column, the `<metric> coverage` columns and
+  the `Valid class counts` block are gone from the business report. The developer report
+  is unchanged.
+- The `translations` argument of `compact_report_counts`, which only business reports used.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added

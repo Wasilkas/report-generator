@@ -2,6 +2,9 @@
 
 `report_generator.v2` is additive. Legacy imports, signatures, constructor defaults,
 configuration fields, YAML loading and CLI entry points retain their existing behavior.
+From 0.3.0 the business report is the exception in its output only: every business entry
+point writes the fixed-column layout described in the README, and the earlier business
+layout is no longer produced.
 The legacy reader still trims labels and excludes numeric-looking strings; structured
 input retains exact lexical labels and rejects duplicates without trimming.
 
@@ -15,16 +18,22 @@ source name. `read_metrics_table(file_path, sheet_name=0)` obtains text labels f
 original Excel cells, retains their lexical spelling, and filters numeric footer cells.
 Missing metric handling remains pandas' normal handling.
 
-`DevReportBuilder(table1, table2, config, *, presentation=...)` and
-`BusinessReportBuilder(...)` accept explicit `PresentationOptions(counts=...)`.
-`counts` is `columns` or `below_table`; the latter separates computed coverage summaries
-before rendering and writes valid/eligible counts directly below tables. Titles, class
-sorting, filtering, missing placeholders, means, comparison eligibility, business goals,
-verdicts, color and number-format calculations remain shared with legacy builders.
-Counts preserve original aggregate populations, including zero and missing values.
-`count_title` and `count_labels` allow explicit display wording; default AP labels are
-AP50, AP75 and AP50-95. `build(path, overwrite=False)` preserves alias and replacement
-protection. `compact_report_counts` remains available for consumers of old layouts.
+`DevReportBuilder(table1, table2, config, *, presentation=...)` accepts explicit
+`PresentationOptions(counts=...)`. `counts` is `columns` or `below_table`; the latter
+separates computed coverage summaries before rendering and writes valid/eligible counts
+directly below tables. Counts preserve original aggregate populations, including zero and
+missing values. `count_title` and `count_labels` allow explicit display wording; default
+AP labels are AP50, AP75 and AP50-95.
+
+`BusinessReportBuilder(table1, table2, config)` takes no presentation options: the
+business report has one fixed-column layout and shows no availability counts. Titles,
+class sorting, filtering, missing placeholders, means, business goals, verdicts, color
+and number-format calculations remain shared with the legacy builders, and the legacy
+business builder writes the same layout.
+
+`build(path, overwrite=False)` preserves alias and replacement protection for both
+builders. `compact_report_counts(path, sheet_names)` remains available for developer
+reports written with coverage columns; it has no `translations` argument.
 
 `write_comparison_workbook(rows, excluded, methodology, path)` is independent from
 those report builders. It consumes all canonical columns in

@@ -50,13 +50,11 @@ class _TableReader:
         return self.table.frame.copy(deep=True)
 
 
-class _StructuredPresentation:
-    def _init_tables(
-        self, model1: MetricsTable, model2: MetricsTable, presentation: PresentationOptions
-    ) -> None:
+class _TableInputs:
+    """Guard supplied tables' source workbooks; tables carry no reader paths."""
+
+    def _init_tables(self, model1: MetricsTable, model2: MetricsTable) -> None:
         self._tables = (model1, model2)
-        self._presentation = presentation
-        self._pending_counts = {}
 
     def _check_output(self, output_path: Path, overwrite: bool) -> None:
         for table in self._tables:
@@ -71,36 +69,33 @@ class _StructuredPresentation:
                 f'Output already exists: {output_path}; use --force to replace it'
             )
 
+
+class _StructuredPresentation(_TableInputs):
+    def _init_presentation(self, presentation: PresentationOptions) -> None:
+        self._presentation = presentation
+        self._pending_counts = {}
+
     def _write_metrics(self, writer, sheet, frame, *, sheet_title):
         if self._presentation.counts == 'columns':
             return writer.write(sheet, frame, sheet_title=sheet_title)
         # The calculator appends generated coverage columns. Identify the
-        # aggregate values directly, before rendering, so translated user metric
-        # headings which happen to end in "coverage" remain ordinary metrics.
+        # aggregate values directly, before rendering, so user metric headings
+        # which happen to end in "coverage" remain ordinary metrics.
         class_col = writer._class_col
         mean = frame.loc[frame[class_col] == 'Среднее']
         if len(mean) != 1:
             raise ValueError(f'Report {sheet.title!r} must have exactly one mean row')
-        translations = self._config.business.column_translations if self._business else {}
-        reverse = {
-            display: source
-            for source, display in translations.items()
-            if source.endswith(' coverage')
-            and translations.get(source.removesuffix(' coverage'), source.removesuffix(' coverage'))
-            in frame.columns
-        }
         columns = []
         counts = []
         for column in frame.columns:
             value = mean.iloc[0][column]
             if not isinstance(value, str) or re.fullmatch(r'\d+/\d+', value) is None:
                 continue
-            source = reverse.get(column, column)
-            if not source.endswith(' coverage'):
+            if not column.endswith(' coverage'):
                 raise ValueError(
-                    f'Report {sheet.title!r} has an unknown class-count header {source!r}'
+                    f'Report {sheet.title!r} has an unknown class-count header {column!r}'
                 )
-            metric = source.removesuffix(' coverage')
+            metric = column.removesuffix(' coverage')
             label = self._presentation.count_labels.get(metric, metric)
             counts.append((f'{label}-valid-class-count', value))
             columns.append(column)
@@ -134,8 +129,6 @@ class _StructuredPresentation:
 class DevReportBuilder(_StructuredPresentation, LegacyDevReportBuilder):
     """Developer reporting over supplied exact-label tables; no file rereads."""
 
-    _business = False
-
     def __init__(
         self,
         model1: MetricsTable,
@@ -144,22 +137,18 @@ class DevReportBuilder(_StructuredPresentation, LegacyDevReportBuilder):
         *,
         presentation: PresentationOptions,
     ) -> None:
-        self._init_tables(model1, model2, presentation)
+        self._init_tables(model1, model2)
+        self._init_presentation(presentation)
         super().__init__(_TableReader(model1), _TableReader(model2), config)
 
 
-class BusinessReportBuilder(_StructuredPresentation, LegacyBusinessReportBuilder):
-    """Business reporting retaining legacy calculation/verdict semantics."""
+class BusinessReportBuilder(_TableInputs, LegacyBusinessReportBuilder):
+    """Business reporting over supplied exact-label tables; no file rereads.
 
-    _business = True
+    The business workbook has one fixed-column layout and shows no availability
+    counts, so it takes no presentation options.
+    """
 
-    def __init__(
-        self,
-        model1: MetricsTable,
-        model2: MetricsTable,
-        config: Config,
-        *,
-        presentation: PresentationOptions,
-    ) -> None:
-        self._init_tables(model1, model2, presentation)
+    def __init__(self, model1: MetricsTable, model2: MetricsTable, config: Config) -> None:
+        self._init_tables(model1, model2)
         super().__init__(_TableReader(model1), _TableReader(model2), config)
