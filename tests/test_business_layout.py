@@ -453,3 +453,24 @@ def test_command_line_writes_the_fixed_column_layout(tmp_path):
     for sheet in metric_sheets(workbook, config):
         assert headers(sheet) == HEADERS
     assert rows(workbook[config.sheet_names.model1])['Среднее']['tp'].value == 'NA'
+
+
+def test_boolean_cells_are_unavailable_in_sums_and_differences(tmp_path):
+    # A flag survives only in a table passed in memory: pandas reads a lone TRUE in an
+    # integer Excel column as 1 before any builder sees it.
+    new = dashboard(NEW).astype({'fp': object, 'Количество примеров test': object})
+    new.loc[new[CLASS_COL] == 'shared', ['fp', 'Количество примеров test']] = True
+    config = Config.default()
+    output = tmp_path / 'business.xlsx'
+    v2.BusinessReportBuilder(
+        v2.MetricsTable(new, 'new.xlsx'), v2.MetricsTable(dashboard(PROD), 'prod.xlsx'), config
+    ).build(output)
+    workbook = load_workbook(output)
+    comparison = rows(workbook[config.sheet_names.comparison])
+    assert comparison['shared']['fp'].value == 'NA'
+    assert comparison['shared']['Число примеров test'].value == 'NA'
+    assert comparison['weak']['fp'].value == -5
+    # The test counts of the new model are True, 20 and 10: a flag is not a count.
+    mean = rows(workbook[config.sheet_names.model1])['Среднее']
+    assert mean['Число примеров test'].value == 30
+    assert comparison['Среднее']['Число примеров test'].value == 0

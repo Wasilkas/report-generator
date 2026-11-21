@@ -21,7 +21,8 @@ from ...core.writer import (
     _fill,
 )
 
-# Example counts by split, in display order; both spellings are accepted as input.
+# Example counts by split, in display order. Either spelling is accepted as input,
+# the same one in both inputs: the bundled translation maps the first onto the second.
 SPLIT_COUNT_COLS = tuple(
     f'{name} {split}'
     for split in ('test', 'train', 'val')
@@ -110,8 +111,10 @@ def add_goal_columns(df: pd.DataFrame, biz: BusinessConfig) -> pd.DataFrame:
 
 
 def _finite(values: pd.Series) -> pd.Series:
-    numeric = pd.to_numeric(values, errors='coerce')
-    return numeric.replace([math.inf, -math.inf], float('nan'))
+    """Coerce to finite numbers; text, flags and infinities are unavailable."""
+    numeric = pd.to_numeric(values, errors='coerce').astype(float)
+    flags = values.map(pd.api.types.is_bool)
+    return numeric.mask(flags).replace([math.inf, -math.inf], float('nan'))
 
 
 def column_differences(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
