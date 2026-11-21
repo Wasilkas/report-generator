@@ -70,35 +70,42 @@ def test_union_saved_reports(tmp_path, builder, scenario):
             config.sheet_names.comparison,
         ]
     ]
+    business = builder is BusinessReportBuilder
     assert list(one) == list(two) == list(diff) == names + ['Среднее']
     assert one['new']['f1_score'].value == 0
     assert one['new']['tp'].value == 0
-    for col in ['f1_score', 'ap50', 'ID', 'confidence', 'tp', 'Количество примеров train']:
-        display_col = (
-            config.business.column_translations.get(col, col)
-            if builder is BusinessReportBuilder
-            else col
-        )
+    # The business layout shows neither identifiers nor AP columns.
+    columns = ['f1_score', 'confidence', 'tp', 'Количество примеров train']
+    for col in columns if business else [*columns, 'ap50', 'ID']:
+        display_col = config.business.column_translations.get(col, col) if business else col
         assert one['deleted'][display_col].value == 'NA'
         assert two['new'][display_col].value == 'NA'
-    assert one['new']['ID'].value == 'id-new'
-    assert two['deleted']['ID'].value == 'id-deleted'
+    if business:
+        assert not {'ID', 'ap50'} & set(one['new'])
+    else:
+        assert one['new']['ID'].value == 'id-new'
+        assert two['deleted']['ID'].value == 'id-deleted'
     for name in ['new', 'deleted']:
         assert diff[name]['f1_score'].value == 'NA'
         assert diff[name]['f1_score'].fill.patternType is None
     assert one['Среднее']['f1_score'].value == pytest.approx(new_mean)
     assert two['Среднее']['f1_score'].value == pytest.approx(prod_mean)
-    assert (
-        one['Среднее']['f1_score coverage'].value
-        == f'{len(new) - (scenario == "asymmetric")}/{len(new) - (scenario == "asymmetric")}'
-    )
+    eligible = len(new) - (scenario == 'asymmetric')
+    if business:
+        # Availability is not shown; the train count of the model's own classes is summed.
+        assert not any(str(key).endswith(' coverage') for key in one['Среднее'])
+        assert one['Среднее']['Число примеров train'].value == 20 * eligible
+    else:
+        assert one['Среднее']['f1_score coverage'].value == f'{eligible}/{eligible}'
     if shared_count:
         assert diff['shared']['f1_score'].value == pytest.approx(0.4)
         assert diff['shared']['f1_score'].fill.fgColor.rgb.endswith(config.colors.positive)
-        assert diff['Среднее']['f1_score coverage'].value == '1/1'
+        if not business:
+            assert diff['Среднее']['f1_score coverage'].value == '1/1'
     else:
         assert diff['Среднее']['f1_score'].value == 'NA'
-        assert diff['Среднее']['f1_score coverage'].value == '0/0'
+        if not business:
+            assert diff['Среднее']['f1_score coverage'].value == '0/0'
     text = ' '.join(str(c.value) for ws in wb for row in ws for c in row)
     assert 'собственный набор' in text and 'общих классов' in text
     if scenario == 'asymmetric':
@@ -145,17 +152,24 @@ def test_partial_columns_missing_and_per_model_identity(tmp_path, builder):
             config.sheet_names.comparison,
         ]
     ]
-    assert one['shared']['ID'].value == 'id-shared'
-    assert two['shared']['ID'].value == 'prod-shared'
-    assert one['shared']['ap50'].value == 'NA'
-    assert one['new']['ap50'].value == 0
-    assert one['Среднее']['ap50'].value == 0
-    assert one['Среднее']['ap50 coverage'].value == '1/2'
-    assert two['shared']['ap50'].value == 'NA'
+    if builder is BusinessReportBuilder:
+        # Identifiers and AP columns are not business columns.
+        assert not {'ID', 'ap50', 'ap50 coverage'} & set(one['shared'])
+    else:
+        assert one['shared']['ID'].value == 'id-shared'
+        assert two['shared']['ID'].value == 'prod-shared'
+        assert one['shared']['ap50'].value == 'NA'
+        assert one['new']['ap50'].value == 0
+        assert one['Среднее']['ap50'].value == 0
+        assert one['Среднее']['ap50 coverage'].value == '1/2'
+        assert two['shared']['ap50'].value == 'NA'
+        assert diff['Среднее']['ap50'].value == 'NA'
+        assert diff['Среднее']['ap50'].fill.patternType is None
+    # A column only one model supplies stays, unavailable for the other model.
     assert one['shared']['precision'].value == 'NA'
     assert two['shared']['precision'].value == 0.4
-    assert diff['Среднее']['ap50'].value == 'NA'
-    assert diff['Среднее']['ap50'].fill.patternType is None
+    assert diff['Среднее']['precision'].value == 'NA'
+    assert diff['Среднее']['precision'].fill.patternType is None
 
 
 @pytest.mark.parametrize('builder', [DevReportBuilder, BusinessReportBuilder])
@@ -174,7 +188,10 @@ def test_empty_eligible_population(tmp_path, builder, both_filtered):
         table(wb[name]) for name in [config.sheet_names.model1, config.sheet_names.comparison]
     ]
     assert one['Среднее']['f1_score'].value == 'NA'
-    assert one['Среднее']['f1_score coverage'].value == '0/0'
+    if builder is BusinessReportBuilder:
+        assert one['Среднее']['Число примеров train'].value == 'NA'
+    else:
+        assert one['Среднее']['f1_score coverage'].value == '0/0'
     assert ('shared' in one) is not both_filtered
     assert diff['Среднее']['f1_score'].value == 'NA'
     if builder is BusinessReportBuilder:

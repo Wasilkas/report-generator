@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pandas as pd
 from openpyxl import Workbook
 
 from ...app_config import CLASS_COL
@@ -13,6 +14,9 @@ from .utils import (
     add_goal_columns,
     build_comparison_color_fn,
     build_format_map,
+    column_differences,
+    fixed_columns,
+    sum_counts,
     to_percentage,
     translate_columns,
     write_excluded_sheet,
@@ -21,13 +25,17 @@ from .utils import (
 
 
 class BusinessReportBuilder(BaseReportBuilder):
-    """Builds the business-oriented Excel report.
+    """Builds the business-oriented Excel report in its fixed-column layout.
 
-    Sheet 1 — new model metrics (Russian headers, % perebrak/nedobrak, goal columns).
+    Sheet 1 — new model metrics: the fixed business columns (Russian headers,
+    % perebrak/nedobrak, goal columns, example counts) and a 'Среднее' row.
     Sheet 2 — prod model metrics, same structure.
-    Sheet 3 — Сравнение: numeric diff (new − prod) with comparison coloring.
+    Sheet 3 — Сравнение: new − prod for every column, with comparison coloring.
     Sheet 4 — Вердикт: F1/classes-in-target/gross-not-target verdict table.
     Sheet 5 — Удаленные классы: classes excluded due to insufficient training data.
+
+    A listed column that neither input supplies is omitted; no other input
+    column is shown. Every cell is a computed value.
     """
 
     def __init__(
@@ -51,40 +59,40 @@ class BusinessReportBuilder(BaseReportBuilder):
             class_col=config.business.column_translations.get('Класс', 'Класс'),
         )
 
+    def _table(self, population: pd.DataFrame, classes: list[str]) -> pd.DataFrame:
+        """Show *classes* above the aggregate row of *population*.
+
+        Aggregates are computed before the missing display rows are added, so
+        placeholders never alter them. Availability counts are not shown.
+        """
+        biz = self._config.business
+        table = self._display_with_mean(population, classes).reindex(columns=population.columns)
+        table = to_percentage(sum_counts(table, population), biz)
+        return translate_columns(table, dict(biz.column_translations))
+
     def build(self, output_path: str | Path, *, overwrite: bool = False) -> None:
         output_path = Path(output_path)
         self._check_output(output_path, overwrite)
         biz = self._config.business
-        translations = dict(biz.column_translations)
 
         df1_raw = self.model1_reader.read()
         df2_raw = self.model2_reader.read()
 
         df1, df2, excluded = self._prepare(df1_raw, df2_raw)
 
+        # The verdict reads the full goal frames; column selection is display only.
         df1_goals = add_goal_columns(df1, biz)
         df2_goals = add_goal_columns(df2, biz)
+        columns = fixed_columns(biz, [*df1_raw.columns, *df2_raw.columns])
 
         classes = sorted(set(df1[CLASS_COL]) | set(df2[CLASS_COL]))
-        population_note = self._population_note(df1, df2)
-        # Verdict inputs remain unpadded; placeholders must not alter denominators.
-        df_diff_display = translate_columns(
-            to_percentage(
-                self._comparison_with_mean(
-                    df1_goals.drop(columns=biz.goal_cols),
-                    df2_goals.drop(columns=biz.goal_cols),
-                    classes,
-                ),
-                biz,
-            ),
-            translations,
-        )
-        df1_display = translate_columns(
-            to_percentage(self._display_with_mean(df1_goals, classes), biz), translations
-        )
-        df2_display = translate_columns(
-            to_percentage(self._display_with_mean(df2_goals, classes), biz), translations
-        )
+        shared = set(df1[CLASS_COL]) & set(df2[CLASS_COL])
+        differences = column_differences(df1_goals[columns], df2_goals[columns])
+
+        df1_display = self._table(df1_goals[columns], classes)
+        df2_display = self._table(df2_goals[columns], classes)
+        # The comparison aggregate covers the classes both models share.
+        df_diff_display = self._table(differences[differences[CLASS_COL].isin(shared)], classes)
 
         wb = Workbook()
         ws1 = wb.active
@@ -94,29 +102,26 @@ class BusinessReportBuilder(BaseReportBuilder):
         ws_verdict = wb.create_sheet(self._config.sheet_names.verdict)
         ws_excl = wb.create_sheet(self._config.sheet_names.excluded)
 
-        self._write_metrics(
-            self._sheet_writer,
+        self._sheet_writer.write(
             ws1,
             df1_display,
             sheet_title=f'Метрики новой модели — {self.model1_reader.file_path.name}',
         )
-        self._write_metrics(
-            self._sheet_writer,
+        self._sheet_writer.write(
             ws2,
             df2_display,
             sheet_title=f'Метрики прод модели — {self.model2_reader.file_path.name}',
         )
-        last_row = self._write_metrics(
-            self._diff_writer,
+        last_row = self._diff_writer.write(
             ws3, df_diff_display, sheet_title='Сравнение (новая − прод)'
         )
         write_comparison_legend(ws3, last_row + 2, self._config, business=True)
         write_verdict_sheet(ws_verdict, df1_goals, df2_goals, self._config)
         write_excluded_sheet(ws_excl, excluded, self._config)
+        note_lines = self._population_note_lines(df1, df2)
         for ws in (ws1, ws2, ws3, ws_verdict):
-            ws.cell(ws.max_row + 2, 1, population_note)
-        for ws in (ws1, ws2, ws3):
-            self._finish_metrics_sheet(ws)
+            for row, line in enumerate(note_lines, ws.max_row + 2):
+                ws.cell(row, 1, line)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(output_path)

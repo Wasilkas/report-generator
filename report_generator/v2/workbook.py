@@ -10,12 +10,14 @@ import io
 import math
 import re
 import unicodedata
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import quoteattr
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl.formula.tokenizer import Tokenizer
@@ -31,8 +33,98 @@ _REFERENCE = re.compile(
 )
 
 
+_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+_MC_PREFIX_ATTRIBUTES = frozenset(
+    f'{{{_MC}}}{name}'
+    for name in (
+        'Ignorable',
+        'ProcessContent',
+        'MustUnderstand',
+        'PreserveElements',
+        'PreserveAttributes',
+    )
+)
+# ElementTree renames prefixes and declares only namespaces used by element and
+# attribute names, but markup-compatibility values (written by Excel, e.g.
+# mc:Ignorable="x14ac xr") name prefixes as text. _parse records the prefixes
+# those values name for each parsed root; _xml declares the missing ones on the
+# serialized root. Adding declarations to ElementTree's output instead of
+# serializing with original prefixes leaves every part without such markup,
+# including openpyxl output and the metadata part, byte-identical.
+# A prefix that names two namespaces in one part maps to None: such a part can
+# still be read, and is rejected only when it has to be written back.
+_COMPAT_PREFIXES: 'weakref.WeakKeyDictionary[ET.Element, dict[str, str | None]]' = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _parse_compat(content: bytes) -> tuple[ET.Element, dict[str, 'str | None']]:
+    """Parse a part once, mapping prefixes named by compatibility values to in-scope URIs."""
+    named: dict[str, str | None] = {}
+    scopes: list[dict[str, str]] = [{}]
+    pending: dict[str, str] = {}
+    root: ET.Element | None = None
+    events = ('start-ns', 'start', 'end')
+    for event, item in ET.iterparse(io.BytesIO(content), events=events):  # noqa: S314
+        if event == 'start-ns':
+            prefix, uri = item
+            pending[prefix] = uri
+        elif event == 'end':
+            scopes.pop()
+        else:
+            if root is None:
+                root = item
+            scope = {**scopes[-1], **pending}
+            pending = {}
+            scopes.append(scope)
+            for key, value in item.attrib.items():
+                if key not in _MC_PREFIX_ATTRIBUTES and (
+                    key != 'Requires' or item.tag != f'{{{_MC}}}Choice'
+                ):
+                    continue
+                for token in value.split():
+                    prefix = token.partition(':')[0]
+                    uri = scope.get(prefix)
+                    if not prefix or prefix == 'xml' or uri is None:
+                        continue
+                    if named.setdefault(prefix, uri) != uri:
+                        named[prefix] = None
+    if root is None:
+        raise ValueError('Workbook XML has no root element')
+    return root, named
+
+
+def _declare_prefixes(content: bytes, prefixes: Mapping[str, 'str | None']) -> bytes:
+    """Declare named prefixes on the serialized root; ElementTree declares all there."""
+    emitted: dict[str, str] = {}
+    for event, item in ET.iterparse(io.BytesIO(content), events=('start-ns', 'start')):  # noqa: S314
+        if event == 'start':
+            break
+        emitted[item[0]] = item[1]
+    declarations = []
+    for prefix, uri in sorted(prefixes.items()):
+        if uri is None:
+            raise ValueError(
+                f'Markup-compatibility prefix {prefix!r} names two namespaces in one workbook part'
+            )
+        if prefix not in emitted:
+            declarations.append(f' xmlns:{prefix}={quoteattr(uri)}')
+        elif emitted[prefix] != uri:
+            raise ValueError(
+                f'Markup-compatibility prefix {prefix!r} conflicts with a serialized prefix'
+            )
+    if not declarations:
+        return content
+    root = re.match(rb'<\?xml[^>]*\?>\s*<[^\s/>]+', content)
+    if root is None:
+        raise ValueError('Serialized workbook XML has no root element')
+    return content[: root.end()] + ''.join(declarations).encode('utf-8') + content[root.end() :]
+
+
 def _xml(root: ET.Element) -> bytes:
-    return cast('bytes', ET.tostring(root, encoding='utf-8', xml_declaration=True))
+    content = cast('bytes', ET.tostring(root, encoding='utf-8', xml_declaration=True))
+    prefixes = _COMPAT_PREFIXES.get(root)
+    return _declare_prefixes(content, prefixes) if prefixes else content
 
 
 def _parse(content: bytes) -> ET.Element:
@@ -40,7 +132,12 @@ def _parse(content: bytes) -> ET.Element:
     # before using the standard parser; no dependency source change is needed.
     if b'\x00' in content or b'<!DOCTYPE' in content.upper() or b'<!ENTITY' in content.upper():
         raise ValueError('Workbook XML must not contain DTDs or entities')
-    return ET.fromstring(content)  # noqa: S314 - declarations rejected above
+    if _MC.encode('utf-8') not in content:
+        return ET.fromstring(content)  # noqa: S314 - declarations rejected above
+    root, prefixes = _parse_compat(content)
+    if prefixes:
+        _COMPAT_PREFIXES[root] = prefixes
+    return root
 
 
 @dataclass(frozen=True)

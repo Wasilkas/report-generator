@@ -93,15 +93,20 @@ class BaseReportBuilder(ABC):
         return self._display_with_mean(differences[differences[CLASS_COL].isin(shared)], classes)
 
     @staticmethod
-    def _population_note(df1: pd.DataFrame, df2: pd.DataFrame) -> str:
+    def _population_note_lines(df1: pd.DataFrame, df2: pd.DataFrame) -> list[str]:
         shared = set(df1[CLASS_COL]) & set(df2[CLASS_COL])
-        return (
+        return [
             f'Средние и вердикт: собственный набор допустимых классов каждой модели '
-            f'(новая: {len(df1)}, прод: {len(df2)}); '
-            f'среднее разниц: общих классов {len(shared)}. '
-            'Наборы могут различаться; NA — отсутствующие или отфильтрованные данные. '
-            'Причины отсутствия сравнения приведены на листе исключений.'
-        )
+            f'(новая: {len(df1)}, прод: {len(df2)});',
+            f'среднее разниц: общих классов {len(shared)}.',
+            'Наборы могут различаться;',
+            'NA — отсутствующие или отфильтрованные данные.',
+            'Причины отсутствия сравнения приведены на листе исключений.',
+        ]
+
+    @classmethod
+    def _population_note(cls, df1: pd.DataFrame, df2: pd.DataFrame) -> str:
+        return ' '.join(cls._population_note_lines(df1, df2))
 
     def _write_metrics(self, writer, sheet, frame, *, sheet_title):
         """Render metrics through the shared writer; legacy layout stays unchanged."""

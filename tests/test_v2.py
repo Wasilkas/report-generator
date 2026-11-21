@@ -8,7 +8,6 @@ from openpyxl import load_workbook
 
 from report_generator.config import Config
 from report_generator.core.reader import MetricsReader
-from report_generator.reports.business.builder import BusinessReportBuilder as LegacyBusiness
 from report_generator.reports.dev.builder import DevReportBuilder as LegacyDev
 from report_generator.v2 import (
     BusinessReportBuilder,
@@ -49,18 +48,15 @@ def sheet_snapshot(sheet):
     }
 
 
-@pytest.mark.parametrize(
-    'legacy,builder', [(LegacyDev, DevReportBuilder), (LegacyBusiness, BusinessReportBuilder)]
-)
 @pytest.mark.parametrize('scenario', ['shared', 'disjoint', 'asymmetric', 'empty'])
 @pytest.mark.parametrize('counts_layout', ['columns', 'below_table'])
 def test_structured_and_legacy_equivalent_calculations_and_layout(
     tmp_path,
-    legacy,
-    builder,
     scenario,
     counts_layout,
 ):
+    # The business builder has one layout and its own tests; see test_business_layout.py.
+    legacy, builder = LegacyDev, DevReportBuilder
     if scenario == 'disjoint':
         one, two = frame(['new'], [0.0]), frame(['deleted'], [0.8])
     else:
@@ -86,7 +82,6 @@ def test_structured_and_legacy_equivalent_calculations_and_layout(
         compact_report_counts(
             old_path,
             (config.sheet_names.model1, config.sheet_names.model2, config.sheet_names.comparison),
-            translations=config.business.column_translations if legacy is LegacyBusiness else None,
         )
     tables = [read_metrics_table(path) for path in paths]
     before = [table.frame.copy(deep=True) for table in tables]
@@ -143,9 +138,11 @@ def test_lexical_classes_numeric_footers_and_direct_availability(tmp_path, build
     assert MetricsReader(source).read()['Класс'].tolist() == ['=safe']
     config = Config.load()
     output = tmp_path / 'output.xlsx'
-    builder(table, table, config, presentation=PresentationOptions(counts='below_table')).build(
-        output
-    )
+    if builder is BusinessReportBuilder:
+        builder(table, table, config).build(output)
+    else:
+        options = PresentationOptions(counts='below_table')
+        builder(table, table, config, presentation=options).build(output)
     workbook = load_workbook(output)
     for title in [
         config.sheet_names.model1,
@@ -157,13 +154,18 @@ def test_lexical_classes_numeric_footers_and_direct_availability(tmp_path, build
         assert {'0001', '1', 'NA', ' 1 ', '=safe'} <= rows.keys()
         assert '0002' not in rows
         assert sheet.cell(rows['=safe'], 1).data_type == 's'
-        assert sheet.cell(rows['AP50-valid-class-count'], 2).value == '4/5'
+        if builder is BusinessReportBuilder:
+            # The business layout shows no availability counts.
+            assert not any(str(name).endswith('-valid-class-count') for name in rows)
+        else:
+            assert sheet.cell(rows['AP50-valid-class-count'], 2).value == '4/5'
         assert not any(str(c.value).endswith(' coverage') for c in sheet[2])
     workbook.close()
 
 
-@pytest.mark.parametrize('builder', [DevReportBuilder, BusinessReportBuilder])
-def test_custom_translations_keep_metric_and_count_source_names(tmp_path, builder):
+def test_custom_translations_keep_metric_and_count_source_names(tmp_path):
+    # Business translations never rename developer headers or their count labels.
+    builder = DevReportBuilder
     settings = tmp_path / 'config.yaml'
     settings.write_text(
         'business:\n  column_translations:\n    ap50: AP custom\n'

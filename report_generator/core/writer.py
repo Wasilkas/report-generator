@@ -203,7 +203,9 @@ def write_comparison_legend(
         color_cell = ws.cell(i, 1)
         if fill is not None:
             color_cell.fill = fill
-        text_cell = ws.cell(i, 2, text)
+        # The business legend puts the text on the coloured cell itself.
+        text_cell = color_cell if business else ws.cell(i, 2)
+        text_cell.value = text
         text_cell.font = Font(name='Calibri')
 
 
