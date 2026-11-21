@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-21
+
 ### Changed
 
 - The business report has one fixed-column layout, written by `generate-report business`,
